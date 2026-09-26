@@ -67,6 +67,14 @@ on:
           - "仅上传 AnyKernel3.zip"
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
+      fix_mi14p_flicker:
+        description: "补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁"
+        required: false
+        type: choice
+        options:
+          - "无"
+          - "6.1.176"
+        default: "无"
 
       # ==================== 文本输入 ====================
       os_patch_level:
@@ -222,6 +230,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
+      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
 
   get-ksu-manager:
     uses: ./.github/workflows/get-manager.yml

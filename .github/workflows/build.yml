@@ -92,6 +92,10 @@ on:
         required: false
         type: boolean
         default: false
+      fix_mi14p_flicker:
+        required: false
+        type: string
+        default: "无"
 
 jobs:
   build-kernel:
@@ -125,6 +129,7 @@ jobs:
           echo "SUSFS 集成补丁导出: ${{ inputs.export_susfs_patches }}"
           echo "Droidspaces   : ${{ inputs.droidspaces }}"
           echo "NTSync        : ${{ inputs.droidspaces_ntsync }}"
+          echo "修复小米14P闪屏: ${{ inputs.fix_mi14p_flicker }}"
           echo "产物上传模式  : ${{ inputs.artifact_upload_mode }}"
           echo "Stock Config  : 自动检测 config/stock_defconfig"
           echo "========================================"
@@ -542,6 +547,17 @@ jobs:
           echo "下载一加 8E 支持补丁..."
           curl -LSs "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c" -o hmbird_patch.c
           echo "obj-y += hmbird_patch.o" >> Makefile
+
+      - name: 补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁
+        if: inputs.fix_mi14p_flicker != '无' && inputs.fix_mi14p_flicker != ''
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/fix_xiaomi_shennong_display.sh" \
+            "${{ env.KERNEL_ROOT }}/common" \
+            "${{ inputs.fix_mi14p_flicker }}" \
+            "${{ inputs.kernel_version }}" \
+            "$ACTUAL_SUBLEVEL" \
+            "${{ inputs.os_patch_level }}"
 
       - name: 确定 KernelSU 分支
         id: ksu-branch

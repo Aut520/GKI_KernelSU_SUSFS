@@ -56,6 +56,14 @@ on:
           - "仅上传 AnyKernel3.zip"
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
+      fix_mi14p_flicker:
+        description: "补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁"
+        required: false
+        type: choice
+        options:
+          - "无"
+          - "6.1.176"
+        default: "无"
 
       # ==================== 文本输入 ====================
       version:
@@ -148,6 +156,10 @@ on:
         required: false
         type: boolean
         default: false
+      fix_mi14p_flicker:
+        required: false
+        type: string
+        default: "无"
       called_from_main:
         description: "是否从 main.yml 调用（内部使用）"
         required: false
@@ -210,6 +222,10 @@ jobs:
             os_patch_level: "2025-12"
           - sub_level: "162"
             os_patch_level: "2026-03"
+          - sub_level: "172"
+            os_patch_level: "2026-06"
+          - sub_level: "176"
+            os_patch_level: "2026-09"
           - sub_level: "X"
             os_patch_level: "lts"
     uses: ./.github/workflows/build.yml
@@ -234,6 +250,7 @@ jobs:
       ksu_mode: ${{ inputs.ksu_mode || '关闭' }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过
