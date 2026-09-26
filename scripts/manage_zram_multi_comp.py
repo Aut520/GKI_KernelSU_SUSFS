@@ -148,8 +148,12 @@ def python_semantic_patch(kernel_root, kernel_version):
         with open(zram_drv_h_path, "r", encoding="utf-8", errors="replace") as f:
             zram_h = f.read()
         if "ZRAM_COMP_PRIORITY_MASK" not in zram_h:
-            zram_h = zram_h.replace("#define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)",
-                                    "#define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)\n\n/* Only 2 bits are allowed for comp priority index */\n#define ZRAM_COMP_PRIORITY_MASK\t0x3")
+            if "#define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)" in zram_h:
+                zram_h = zram_h.replace("#define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)",
+                                        "#define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)\n\n/* Only 2 bits are allowed for comp priority index */\n#define ZRAM_COMP_PRIORITY_MASK\t0x3UL")
+            elif "#define ZRAM_FLAG_SHIFT 24" in zram_h:
+                zram_h = zram_h.replace("#define ZRAM_FLAG_SHIFT 24",
+                                        "#define ZRAM_FLAG_SHIFT 24\n\n/* Only 2 bits are allowed for comp priority index */\n#define ZRAM_COMP_PRIORITY_MASK\t0x3UL")
             zram_h = zram_h.replace("\tZRAM_IDLE,\t/* not accessed page since last idle marking */",
                                     "\tZRAM_IDLE,\t/* not accessed page since last idle marking */\n\tZRAM_INCOMPRESSIBLE, /* none of the algorithms could compress it */\n\n\tZRAM_COMP_PRIORITY_BIT1, /* First bit of comp priority index */\n\tZRAM_COMP_PRIORITY_BIT2, /* Second bit of comp priority index */")
             zram_h = zram_h.replace("struct zram {",
@@ -176,7 +180,7 @@ static inline void zram_set_priority(struct zram *zram, u32 index, u32 prio)
 	 */
 	zram->table[index].flags &= ~(ZRAM_COMP_PRIORITY_MASK <<
 				      ZRAM_COMP_PRIORITY_BIT1);
-	zram->table[index].flags |= (prio << ZRAM_COMP_PRIORITY_BIT1);
+	zram->table[index].flags |= ((unsigned long)prio << ZRAM_COMP_PRIORITY_BIT1);
 }
 
 static inline u32 zram_get_priority(struct zram *zram, u32 index)

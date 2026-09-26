@@ -77,7 +77,7 @@ impl MmdDaemon {
                     Ok(guard) => guard,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                ctx.do_maintenance(&self.config)
+                ctx.do_maintenance(&self.config, false)
             };
 
             info!(
@@ -128,13 +128,14 @@ fn handle_client(
     let command = line.trim();
 
     match command {
-        "trigger" | "maintain" => {
+        "trigger" | "maintain" | "trigger_all" => {
+            let force_all = command == "trigger_all";
             let summary = {
                 let mut ctx = match context.lock() {
                     Ok(guard) => guard,
                     Err(p) => p.into_inner(),
                 };
-                ctx.do_maintenance(&config)
+                ctx.do_maintenance(&config, force_all)
             };
             writeln!(
                 stream,

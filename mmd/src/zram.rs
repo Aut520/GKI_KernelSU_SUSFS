@@ -85,6 +85,9 @@ pub trait SysfsZramApi: Send {
 
     /// Read "/sys/block/zramX/io_stat".
     fn read_io_stat(&self) -> io::Result<String>;
+
+    /// Read "/sys/block/zramX/max_comp_streams".
+    fn read_max_comp_streams(&self) -> io::Result<String>;
 }
 
 /// The implementation of [SysfsZramApi].
@@ -211,6 +214,10 @@ impl SysfsZramApi for SysfsZramApiImpl {
 
     fn read_io_stat(&self) -> io::Result<String> {
         std::fs::read_to_string(self.root_path.join("io_stat"))
+    }
+
+    fn read_max_comp_streams(&self) -> io::Result<String> {
+        std::fs::read_to_string(self.root_path.join("max_comp_streams"))
     }
 }
 

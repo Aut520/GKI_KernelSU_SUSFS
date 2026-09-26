@@ -75,7 +75,7 @@ index 3bfd318..2a5dffd 100644
 +	 */
 +	zram->table[index].flags &= ~(ZRAM_COMP_PRIORITY_MASK <<
 +				      ZRAM_COMP_PRIORITY_BIT1);
-+	zram->table[index].flags |= (prio << ZRAM_COMP_PRIORITY_BIT1);
++	zram->table[index].flags |= ((unsigned long)prio << ZRAM_COMP_PRIORITY_BIT1);
 +}
 +
 +static inline u32 zram_get_priority(struct zram *zram, u32 index)
@@ -859,10 +859,18 @@ index 3bfd318..2a5dffd 100644
  	zram_debugfs_register(zram);
  	pr_info("Added device: %s\n", zram->disk->disk_name);
 diff --git a/drivers/block/zram/zram_drv.h b/drivers/block/zram/zram_drv.h
-index f2fd46d..fd87627 100644
 --- a/drivers/block/zram/zram_drv.h
 +++ b/drivers/block/zram/zram_drv.h
-@@ -50,6 +50,10 @@ enum zram_pageflags {
+@@ -40,6 +40,9 @@
+  */
+ #define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)
+ 
++/* Only 2 bits are allowed for comp priority index */
++#define ZRAM_COMP_PRIORITY_MASK	0x3UL
++
+ /* Flags for zram pages (table[page_no].flags) */
+ enum zram_pageflags {
+@@ -50,6 +53,10 @@ enum zram_pageflags {
  	ZRAM_UNDER_WB,	/* page is under writeback */
  	ZRAM_HUGE,	/* Incompressible page */
  	ZRAM_IDLE,	/* not accessed page since last idle marking */
