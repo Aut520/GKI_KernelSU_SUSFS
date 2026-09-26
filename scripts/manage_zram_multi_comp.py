@@ -24,10 +24,8 @@ def append_config(config_file):
 
     configs_to_add = [
         "CONFIG_ZRAM_MULTI_COMP=y\n",
-        "CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y\n",
-        "CONFIG_ZRAM_BACKEND_ZSTD=y\n",
-        "CONFIG_CRYPTO_ZSTD=y\n",
-        "CONFIG_ZRAM_WRITEBACK=y\n"
+        "CONFIG_ZRAM_WRITEBACK=y\n",
+        "CONFIG_CRYPTO_ZSTD=y\n"
     ]
 
     try:
