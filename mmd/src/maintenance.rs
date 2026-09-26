@@ -126,6 +126,19 @@ impl ZramContext {
         let mut refresh_idle_pages = true;
         let mut maintenance_active = false;
 
+        // Dynamic recheck: if recompression was not yet configured during daemon startup,
+        // dynamically detect if the secondary algorithm was configured in the meantime.
+        if self.zram_recompression.is_none() {
+            let active = self.zram_devices.iter().any(|zram| {
+                get_zram_recompression_status(zram).unwrap_or(ZramRecompressionStatus::Unsupported)
+                    == ZramRecompressionStatus::Activated
+            });
+            if active {
+                info!("ZRAM secondary recompression algorithm detected! Dynamically activating engine.");
+                self.zram_recompression = Some(ZramRecompression::new());
+            }
+        }
+
         if let Some(recompression) = self.zram_recompression.as_mut() {
             for zram in self.zram_devices.iter() {
                 let ok = Self::execute_recompression(
