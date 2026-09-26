@@ -428,6 +428,16 @@ static int zram_read_from_zspool(struct zram *zram, struct page *page,
                 if anchor_handle in read_block:
                     idx_bh = read_block.find(anchor_handle)
                     new_read_block = read_block[:idx_bh] + "\tret = zram_read_from_zspool(zram, page, index);\n\tzram_slot_unlock(zram, index);\n\treturn ret;\n}\n\n"
+                    # 清理重构后在 __zram_bvec_read 中未被使用的局部变量声明，防止 -Werror 报 unused-variable
+                    for unused_decl in [
+                        "\tstruct zcomp_strm *zstrm;\n",
+                        "\tunsigned long handle;\n",
+                        "\tunsigned int size;\n",
+                        "\tvoid *src, *dst;\n",
+                        "\tvoid *src;\n",
+                        "\tvoid *dst;\n",
+                    ]:
+                        new_read_block = new_read_block.replace(unused_decl, "")
                     zram_c = zram_c[:idx_read_start] + new_read_block + zram_c[idx_read_next:]
 
             # __zram_bvec_write primary comp
@@ -743,10 +753,12 @@ static DEVICE_ATTR_WO(recompress);
 	zram_meta_free(zram, disksize);"""
                 repl_out_free = """out_free_comps:
 	zram_destroy_comps(zram);
-out_free_meta:
 	zram_meta_free(zram, disksize);"""
                 if target_out_free in new_disksize_block:
                     new_disksize_block = new_disksize_block.replace(target_out_free, repl_out_free)
+                # 兼容处理残留的 out_free_meta 孤立标签
+                new_disksize_block = new_disksize_block.replace("out_free_comps:\n\tzram_destroy_comps(zram);\nout_free_meta:\n",
+                                                               "out_free_comps:\n\tzram_destroy_comps(zram);\n")
                 zram_c = zram_c[:idx_disksize_start] + new_disksize_block + zram_c[idx_disksize_end:]
 
             # zram_disk_attrs
@@ -776,6 +788,57 @@ out_free_meta:
         log(f"[ERROR] Python 语义修补过程异常: {e}")
         return False
 
+def sanitize_zram_drv(kernel_root):
+    """
+    检查并自愈净化 drivers/block/zram/zram_drv.c:
+    1. 消除 __zram_bvec_read 中未使用的局部变量声明 (zstrm, handle, size, src, dst)，防止 -Werror,-Wunused-variable
+    2. 消除 disksize_store 中未使用的 out_free_meta: 标签，防止 -Werror,-Wunused-label
+    """
+    zram_c_path = os.path.join(kernel_root, "drivers/block/zram/zram_drv.c")
+    if not os.path.isfile(zram_c_path):
+        return
+    try:
+        with open(zram_c_path, "r", encoding="utf-8", errors="replace") as f:
+            code = f.read()
+
+        changed = False
+
+        # 1. 修复 __zram_bvec_read
+        idx_read = code.find("static int __zram_bvec_read(")
+        if idx_read != -1:
+            idx_read_next = code.find("static int zram_bvec_read(", idx_read)
+            if idx_read_next != -1:
+                read_block = code[idx_read:idx_read_next]
+                if "zram_read_from_zspool" in read_block:
+                    clean_read_block = read_block
+                    for unused_decl in [
+                        "\tstruct zcomp_strm *zstrm;\n",
+                        "\tunsigned long handle;\n",
+                        "\tunsigned int size;\n",
+                        "\tvoid *src, *dst;\n",
+                        "\tvoid *src;\n",
+                        "\tvoid *dst;\n",
+                    ]:
+                        clean_read_block = clean_read_block.replace(unused_decl, "")
+                    if clean_read_block != read_block:
+                        code = code[:idx_read] + clean_read_block + code[idx_read_next:]
+                        changed = True
+
+        # 2. 修复 disksize_store 中的 out_free_meta: 标签
+        if "out_free_comps:" in code and "out_free_meta:" in code:
+            if "goto out_free_meta;" not in code:
+                code = code.replace("out_free_comps:\n\tzram_destroy_comps(zram);\nout_free_meta:\n",
+                                    "out_free_comps:\n\tzram_destroy_comps(zram);\n")
+                code = code.replace("\nout_free_meta:\n", "\n")
+                changed = True
+
+        if changed:
+            with open(zram_c_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(code)
+            log("[OK] drivers/block/zram/zram_drv.c 自愈净化完成 (已消除 unused-variable 与 unused-label)")
+    except Exception as e:
+        log(f"[WARN] zram_drv.c 自愈净化检查异常: {e}")
+
 def apply_patch(kernel_root, patch_file, kernel_version):
     zram_drv_h = os.path.join(kernel_root, "drivers/block/zram/zram_drv.h")
     if os.path.isfile(zram_drv_h):
@@ -783,6 +846,7 @@ def apply_patch(kernel_root, patch_file, kernel_version):
             with open(zram_drv_h, "r", encoding="utf-8", errors="replace") as f:
                 if "CONFIG_ZRAM_MULTI_COMP" in f.read():
                     log(f"[INFO] {kernel_version} 内核源码已打入过 Multi-Comp 补丁，跳过重复应用")
+                    sanitize_zram_drv(kernel_root)
                     return True
         except Exception:
             pass
@@ -796,6 +860,7 @@ def apply_patch(kernel_root, patch_file, kernel_version):
             git_res = subprocess.run(git_cmd, cwd=kernel_root, capture_output=True, text=True)
             if git_res.returncode == 0:
                 log(f"[OK] [轨道1] 通过 git apply 成功打入 {kernel_version} Multi-Comp 驱动补丁！")
+                sanitize_zram_drv(kernel_root)
                 return True
             else:
                 log(f"[INFO] [轨道1] git apply 未命中上下文 (返回码 {git_res.returncode})，错误摘要: {git_res.stderr.strip() or git_res.stdout.strip()}")
@@ -808,6 +873,7 @@ def apply_patch(kernel_root, patch_file, kernel_version):
             res = subprocess.run(cmd, cwd=kernel_root, capture_output=True, text=True)
             if res.returncode == 0:
                 log(f"[OK] [轨道1] 通过 patch 命令成功打入 {kernel_version} Multi-Comp 驱动补丁！")
+                sanitize_zram_drv(kernel_root)
                 return True
         except Exception:
             pass
@@ -817,6 +883,7 @@ def apply_patch(kernel_root, patch_file, kernel_version):
     success = python_semantic_patch(kernel_root, kernel_version)
     if success:
         log(f"[OK] [轨道2] Python 语义自适应修补引擎已成功为 {kernel_version} 注入 Multi-Comp 驱动！")
+        sanitize_zram_drv(kernel_root)
         return True
 
     return False
