@@ -15,6 +15,36 @@ index fe7a4b7..a23139b 100644
 +	  re-compress pages using a potentially slower but more effective
 +	  compression algorithm. Note, that IDLE page recompression
 +	  requires ZRAM_MEMORY_TRACKING.
+diff --git a/drivers/block/zram/zcomp.c b/drivers/block/zram/zcomp.c
+index b086504..d934a0d 100644
+--- a/drivers/block/zram/zcomp.c
++++ b/drivers/block/zram/zcomp.c
+@@ -204,7 +204,7 @@ void zcomp_destroy(struct zcomp *comp)
+  * case of allocation error, or any other error potentially
+  * returned by zcomp_init().
+  */
+-struct zcomp *zcomp_create(const char *compress)
++struct zcomp *zcomp_create(const char *alg)
+ {
+ 	struct zcomp *comp;
+ 	int error;
+@@ -214,14 +214,14 @@ struct zcomp *zcomp_create(const char *compress)
+ 	 * is not loaded yet. We must do it here, otherwise we are about to
+ 	 * call /sbin/modprobe under CPU hot-plug lock.
+ 	 */
+-	if (!zcomp_available_algorithm(compress))
++	if (!zcomp_available_algorithm(alg))
+ 		return ERR_PTR(-EINVAL);
+ 
+ 	comp = kzalloc(sizeof(struct zcomp), GFP_KERNEL);
+ 	if (!comp)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	comp->name = compress;
++	comp->name = alg;
+ 	error = zcomp_init(comp);
+ 	if (error) {
+ 		kfree(comp);
 diff --git a/drivers/block/zram/zcomp.h b/drivers/block/zram/zcomp.h
 index 40f6420..cdefdef 100644
 --- a/drivers/block/zram/zcomp.h
@@ -29,7 +59,7 @@ index 40f6420..cdefdef 100644
  
  struct zcomp_strm *zcomp_stream_get(struct zcomp *comp);
 diff --git a/drivers/block/zram/zram_drv.c b/drivers/block/zram/zram_drv.c
-index 3bfd318..ec4cecb 100644
+index 3bfd318..83710db 100644
 --- a/drivers/block/zram/zram_drv.c
 +++ b/drivers/block/zram/zram_drv.c
 @@ -157,6 +157,26 @@ static inline bool is_partial_io(struct bio_vec *bvec)
@@ -80,7 +110,7 @@ index 3bfd318..ec4cecb 100644
  
  		if (count <= copied) {
  			zram_slot_unlock(zram, index);
-@@ -998,31 +1023,32 @@ static ssize_t max_comp_streams_store(struct device *dev,
+@@ -998,47 +1023,156 @@ static ssize_t max_comp_streams_store(struct device *dev,
  	return len;
  }
  
@@ -90,7 +120,14 @@ index 3bfd318..ec4cecb 100644
  {
 -	size_t sz;
 -	struct zram *zram = dev_to_zram(dev);
-+	/* Do not free previous alg name, it is allocated in env */
++	/* 仅释放动态堆内存，不释放静态字符串常量 */
++	if (zram->comp_algs[prio] &&
++	    zram->comp_algs[prio] != default_compressor &&
++	    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
++	    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
++	    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
++		kfree(zram->comp_algs[prio]);
++
 +	zram->comp_algs[prio] = alg;
 +}
 +
@@ -112,21 +149,35 @@ index 3bfd318..ec4cecb 100644
  {
 -	struct zram *zram = dev_to_zram(dev);
 -	char compressor[ARRAY_SIZE(zram->compressor)];
-+	char compressor[CRYPTO_MAX_ALG_NAME];
++	char *compressor;
  	size_t sz;
  
 -	strlcpy(compressor, buf, sizeof(compressor));
--	/* ignore trailing newline */
-+	strscpy(compressor, buf, sizeof(compressor));
- 	sz = strlen(compressor);
--	if (sz > 0 && compressor[sz - 1] == '\n')
++	sz = strlen(buf);
++	if (sz >= CRYPTO_MAX_ALG_NAME)
++		return -E2BIG;
++
++	compressor = kstrdup(buf, GFP_KERNEL);
++	if (!compressor)
++		return -ENOMEM;
++
+ 	/* ignore trailing newline */
+-	sz = strlen(compressor);
+ 	if (sz > 0 && compressor[sz - 1] == '\n')
 -		compressor[sz - 1] = 0x00;
-+	if (sz && compressor[sz - 1] == '\n')
 +		compressor[sz - 1] = '\0';
  
- 	if (!zcomp_available_algorithm(compressor))
+-	if (!zcomp_available_algorithm(compressor))
++	if (!zcomp_available_algorithm(compressor)) {
++		kfree(compressor);
  		return -EINVAL;
-@@ -1034,11 +1060,102 @@ static ssize_t comp_algorithm_store(struct device *dev,
++	}
+ 
+ 	down_write(&zram->init_lock);
+ 	if (init_done(zram)) {
+ 		up_write(&zram->init_lock);
++		kfree(compressor);
+ 		pr_info("Can't change algorithm for initialized device\n");
  		return -EBUSY;
  	}
  
@@ -135,8 +186,8 @@ index 3bfd318..ec4cecb 100644
  	up_write(&zram->init_lock);
 -	return len;
 +	return 0;
- }
- 
++}
++
 +static ssize_t comp_algorithm_show(struct device *dev,
 +				   struct device_attribute *attr,
 +				   char *buf)
@@ -223,15 +274,15 @@ index 3bfd318..ec4cecb 100644
 +
 +	ret = __comp_algorithm_store(zram, prio, alg);
 +	return ret ? ret : len;
-+}
-+
+ }
+ 
 +static DEVICE_ATTR_RW(recomp_algorithm);
 +#endif
 +
  static ssize_t compact_store(struct device *dev,
  		struct device_attribute *attr, const char *buf, size_t len)
  {
-@@ -1239,29 +1356,21 @@ out:
+@@ -1239,29 +1373,21 @@ out:
  		~(1UL << ZRAM_LOCK | 1UL << ZRAM_UNDER_WB));
  }
  
@@ -245,7 +296,8 @@ index 3bfd318..ec4cecb 100644
 +static int zram_read_from_zspool(struct zram *zram, struct page *page,
 +				 u32 index)
  {
- 	struct zcomp_strm *zstrm;
+-	struct zcomp_strm *zstrm;
++	struct zcomp_strm *zstrm = NULL;
  	unsigned long handle;
  	unsigned int size;
  	void *src, *dst;
@@ -269,7 +321,7 @@ index 3bfd318..ec4cecb 100644
  	handle = zram_get_handle(zram, index);
  	if (!handle || zram_test_flag(zram, index, ZRAM_SAME)) {
  		unsigned long value;
-@@ -1271,14 +1380,14 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
+@@ -1271,14 +1397,18 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
  		mem = kmap_atomic(page);
  		zram_fill_page(mem, PAGE_SIZE, value);
  		kunmap_atomic(mem);
@@ -280,13 +332,17 @@ index 3bfd318..ec4cecb 100644
  	size = zram_get_obj_size(zram, index);
  
 +	prio = zram_get_priority(zram, index);
++	/* 安全防御护栏：若次级流后端不存在，强制降级到 Primary 流 */
++	if (unlikely(prio >= ZRAM_MAX_COMPS || !zram->comps[prio]))
++		prio = ZRAM_PRIMARY_COMP;
++
  	if (size != PAGE_SIZE)
 -		zstrm = zcomp_stream_get(zram->comp);
 +		zstrm = zcomp_stream_get(zram->comps[prio]);
  
  	src = zs_map_object(zram->mem_pool, handle, ZS_MM_RO);
  	if (size == PAGE_SIZE) {
-@@ -1290,10 +1399,9 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
+@@ -1290,10 +1420,9 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
  		dst = kmap_atomic(page);
  		ret = zcomp_decompress(zstrm, src, size, dst);
  		kunmap_atomic(dst);
@@ -298,7 +354,7 @@ index 3bfd318..ec4cecb 100644
  
  	/* Should NEVER happen. Return bio error if it does. */
  	if (WARN_ON(ret))
-@@ -1302,6 +1410,30 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
+@@ -1302,6 +1431,30 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
  	return ret;
  }
  
@@ -329,7 +385,7 @@ index 3bfd318..ec4cecb 100644
  static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
  				u32 index, int offset, struct bio *bio)
  {
-@@ -1359,13 +1491,13 @@ static int __zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
+@@ -1359,13 +1512,13 @@ static int __zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
  	kunmap_atomic(mem);
  
  compress_again:
@@ -345,7 +401,7 @@ index 3bfd318..ec4cecb 100644
  		pr_err("Compression failed! err=%d\n", ret);
  		zs_free(zram->mem_pool, handle);
  		return ret;
-@@ -1394,7 +1526,7 @@ compress_again:
+@@ -1394,7 +1547,7 @@ compress_again:
  				__GFP_MOVABLE |
  				__GFP_CMA);
  	if (!handle) {
@@ -354,7 +410,7 @@ index 3bfd318..ec4cecb 100644
  		atomic64_inc(&zram->stats.writestall);
  		handle = zs_malloc(zram->mem_pool, comp_len,
  				GFP_NOIO | __GFP_HIGHMEM |
-@@ -1408,7 +1540,7 @@ compress_again:
+@@ -1408,7 +1561,7 @@ compress_again:
  	update_used_max(zram, alloced_pages);
  
  	if (zram->limit_pages && alloced_pages > zram->limit_pages) {
@@ -363,7 +419,7 @@ index 3bfd318..ec4cecb 100644
  		zs_free(zram->mem_pool, handle);
  		return -ENOMEM;
  	}
-@@ -1422,7 +1554,7 @@ compress_again:
+@@ -1422,7 +1575,7 @@ compress_again:
  	if (comp_len == PAGE_SIZE)
  		kunmap_atomic(src);
  
@@ -372,7 +428,7 @@ index 3bfd318..ec4cecb 100644
  	zs_unmap_object(zram->mem_pool, handle);
  	atomic64_add(comp_len, &zram->stats.compr_data_size);
  out:
-@@ -1444,6 +1576,7 @@ out:
+@@ -1444,6 +1597,7 @@ out:
  	}  else {
  		zram_set_handle(zram, index, handle);
  		zram_set_obj_size(zram, index, comp_len);
@@ -380,7 +436,7 @@ index 3bfd318..ec4cecb 100644
  	}
  	zram_slot_unlock(zram, index);
  
-@@ -1631,6 +1764,251 @@ error:
+@@ -1631,6 +1785,251 @@ error:
  	return BLK_QC_T_NONE;
  }
  
@@ -632,7 +688,7 @@ index 3bfd318..ec4cecb 100644
  static void zram_slot_free_notify(struct block_device *bdev,
  				unsigned long index)
  {
-@@ -1702,9 +2080,22 @@ out:
+@@ -1702,9 +2101,34 @@ out:
  	return ret;
  }
  
@@ -642,12 +698,24 @@ index 3bfd318..ec4cecb 100644
 +	u32 prio;
 +
 +	for (prio = 0; prio < ZRAM_MAX_COMPS; prio++) {
-+		if (zram->comps[prio]) {
-+			zcomp_destroy(zram->comps[prio]);
-+			zram->comps[prio] = NULL;
-+		}
++		struct zcomp *comp = zram->comps[prio];
++
++		zram->comps[prio] = NULL;
++		if (!comp)
++			continue;
++		zcomp_destroy(comp);
++		zram->num_active_comps--;
 +	}
-+	zram->num_active_comps = 0;
++
++	for (prio = ZRAM_PRIMARY_COMP; prio < ZRAM_MAX_COMPS; prio++) {
++		if (zram->comp_algs[prio] &&
++		    zram->comp_algs[prio] != default_compressor &&
++		    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
++		    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
++		    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
++			kfree(zram->comp_algs[prio]);
++		zram->comp_algs[prio] = NULL;
++	}
 +}
 +
  static void zram_reset_device(struct zram *zram)
@@ -656,7 +724,7 @@ index 3bfd318..ec4cecb 100644
  	u64 disksize;
  
  	down_write(&zram->init_lock);
-@@ -1716,7 +2107,6 @@ static void zram_reset_device(struct zram *zram)
+@@ -1716,7 +2140,6 @@ static void zram_reset_device(struct zram *zram)
  		return;
  	}
  
@@ -664,17 +732,26 @@ index 3bfd318..ec4cecb 100644
  	disksize = zram->disksize;
  	zram->disksize = 0;
  
-@@ -1727,7 +2117,8 @@ static void zram_reset_device(struct zram *zram)
+@@ -1727,7 +2150,17 @@ static void zram_reset_device(struct zram *zram)
  	/* I/O operation under all of CPU are done so let's free */
  	zram_meta_free(zram, disksize);
  	memset(&zram->stats, 0, sizeof(zram->stats));
 -	zcomp_destroy(comp);
 +	zram_destroy_comps(zram);
-+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	if (zcomp_available_algorithm("lz4"))
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
++	else
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++#ifdef CONFIG_ZRAM_MULTI_COMP
++	if (zcomp_available_algorithm("zstd"))
++		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
++	else if (zcomp_available_algorithm("lz4hc"))
++		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "lz4hc");
++#endif
  	reset_bdev(zram);
  }
  
-@@ -1736,6 +2127,7 @@ static ssize_t disksize_store(struct device *dev,
+@@ -1736,12 +2169,13 @@ static ssize_t disksize_store(struct device *dev,
  {
  	u64 disksize;
  	struct zcomp *comp;
@@ -682,7 +759,14 @@ index 3bfd318..ec4cecb 100644
  	struct zram *zram = dev_to_zram(dev);
  	int err;
  
-@@ -1756,15 +2148,20 @@ static ssize_t disksize_store(struct device *dev,
+ 	disksize = memparse(buf, NULL);
+ 	if (!disksize)
+-		return -EINVAL;
++		disksize = (u64)totalram_pages() << PAGE_SHIFT;
+ 
+ 	down_write(&zram->init_lock);
+ 	if (init_done(zram)) {
+@@ -1756,15 +2190,20 @@ static ssize_t disksize_store(struct device *dev,
  		goto out_unlock;
  	}
  
@@ -690,28 +774,27 @@ index 3bfd318..ec4cecb 100644
 -	if (IS_ERR(comp)) {
 -		pr_err("Cannot initialise %s compressing backend\n",
 -				zram->compressor);
--		err = PTR_ERR(comp);
--		goto out_free_meta;
--	}
 +	for (num_comps = 0; num_comps < ZRAM_MAX_COMPS; num_comps++) {
 +		if (!zram->comp_algs[num_comps])
 +			continue;
- 
--	zram->comp = comp;
++
 +		comp = zcomp_create(zram->comp_algs[num_comps]);
 +		if (IS_ERR(comp)) {
 +			pr_err("Cannot initialise %s compressing backend\n",
 +			       zram->comp_algs[num_comps]);
-+			err = PTR_ERR(comp);
+ 		err = PTR_ERR(comp);
+-		goto out_free_meta;
 +			goto out_free_comps;
 +		}
 +		zram->comps[num_comps] = comp;
 +		zram->num_active_comps++;
-+	}
+ 	}
+-
+-	zram->comp = comp;
  	zram->disksize = disksize;
  	set_capacity(zram->disk, zram->disksize >> SECTOR_SHIFT);
  
-@@ -1773,7 +2170,8 @@ static ssize_t disksize_store(struct device *dev,
+@@ -1773,7 +2212,8 @@ static ssize_t disksize_store(struct device *dev,
  
  	return len;
  
@@ -721,7 +804,7 @@ index 3bfd318..ec4cecb 100644
  	zram_meta_free(zram, disksize);
  out_unlock:
  	up_write(&zram->init_lock);
-@@ -1881,6 +2279,10 @@ static struct attribute *zram_disk_attrs[] = {
+@@ -1881,6 +2321,10 @@ static struct attribute *zram_disk_attrs[] = {
  	&dev_attr_idle.attr,
  	&dev_attr_max_comp_streams.attr,
  	&dev_attr_comp_algorithm.attr,
@@ -732,12 +815,21 @@ index 3bfd318..ec4cecb 100644
  #ifdef CONFIG_ZRAM_WRITEBACK
  	&dev_attr_backing_dev.attr,
  	&dev_attr_writeback.attr,
-@@ -1985,7 +2387,7 @@ static int zram_add(void)
+@@ -1985,7 +2429,16 @@ static int zram_add(void)
  	blk_queue_flag_set(QUEUE_FLAG_STABLE_WRITES, zram->disk->queue);
  	device_add_disk(NULL, zram->disk, zram_disk_attr_groups);
  
 -	strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));
-+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++		if (zcomp_available_algorithm("lz4"))
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
++	else
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++#ifdef CONFIG_ZRAM_MULTI_COMP
++	if (zcomp_available_algorithm("zstd"))
++		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
++	else if (zcomp_available_algorithm("lz4hc"))
++		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "lz4hc");
++#endif
  
  	zram_debugfs_register(zram);
  	pr_info("Added device: %s\n", zram->disk->disk_name);
