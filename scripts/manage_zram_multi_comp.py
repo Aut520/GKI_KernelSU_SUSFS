@@ -503,7 +503,7 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 
 	handle_old = zram_get_handle(zram, index);
 	if (!handle_old)
-		return -EINVAL;
+		return 0;
 
 	comp_len_old = zram_get_obj_size(zram, index);
 	/*
@@ -688,6 +688,11 @@ static ssize_t recompress_store(struct device *dev,
 		if (!zram_allocated(zram, index))
 			goto next;
 
+		if (zram_test_flag(zram, index, ZRAM_SAME) ||
+		    zram_test_flag(zram, index, ZRAM_WB) ||
+		    zram_test_flag(zram, index, ZRAM_UNDER_WB))
+			goto next;
+
 		if (mode & RECOMPRESS_IDLE &&
 		    !zram_test_flag(zram, index, ZRAM_IDLE))
 			goto next;
@@ -707,7 +712,10 @@ next:
 			continue;
 
 		zram_slot_lock(zram, index);
-		if (!zram_allocated(zram, index)) {
+		if (!zram_allocated(zram, index) ||
+		    zram_test_flag(zram, index, ZRAM_SAME) ||
+		    zram_test_flag(zram, index, ZRAM_WB) ||
+		    zram_test_flag(zram, index, ZRAM_UNDER_WB)) {
 			zram_slot_unlock(zram, index);
 			continue;
 		}
