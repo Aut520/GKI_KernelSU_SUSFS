@@ -67,6 +67,13 @@ on:
           - "123"
           - "345"
         default: "off"
+      fix_mi14p_flicker:
+        description: "补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁"
+        type: choice
+        options:
+          - "无"
+          - "6.1.176"
+        default: "无"
 
       # ==================== 文本输入 ====================
       version:
@@ -209,6 +216,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
       called_from_main: true
 
   # ==================== Android 15 - 6.6 构建 ====================
