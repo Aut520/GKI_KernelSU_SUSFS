@@ -24,8 +24,11 @@ def append_config(config_file):
 
     configs_to_add = [
         "CONFIG_ZRAM_MULTI_COMP=y\n",
-        "CONFIG_ZRAM_WRITEBACK=y\n",
-        "CONFIG_CRYPTO_ZSTD=y\n"
+        "CONFIG_ZRAM_MEMORY_TRACKING=y\n",
+        "CONFIG_CRYPTO_LZ4=y\n",
+        "CONFIG_CRYPTO_ZSTD=y\n",
+        "CONFIG_ZRAM_DEF_COMP_LZ4=y\n",
+        'CONFIG_ZRAM_DEF_COMP="lz4"\n'
     ]
 
     try:
@@ -209,7 +212,14 @@ static inline u32 zram_get_priority(struct zram *zram, u32 index)
             if idx_comp_alg != -1 and idx_compact != -1:
                 repl_comp_alg = """static void comp_algorithm_set(struct zram *zram, u32 prio, const char *alg)
 {
-	/* Do not free previous alg name, it is allocated in env */
+	/* 仅释放动态堆内存，不释放静态字符串常量 */
+	if (zram->comp_algs[prio] &&
+	    zram->comp_algs[prio] != default_compressor &&
+	    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
+	    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
+	    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
+		kfree(zram->comp_algs[prio]);
+
 	zram->comp_algs[prio] = alg;
 }
 
@@ -226,20 +236,30 @@ static ssize_t __comp_algorithm_show(struct zram *zram, u32 prio, char *buf)
 
 static int __comp_algorithm_store(struct zram *zram, u32 prio, const char *buf)
 {
-	char compressor[CRYPTO_MAX_ALG_NAME];
+	char *compressor;
 	size_t sz;
 
-	strscpy(compressor, buf, sizeof(compressor));
-	sz = strlen(compressor);
-	if (sz && compressor[sz - 1] == '\\n')
+	sz = strlen(buf);
+	if (sz >= CRYPTO_MAX_ALG_NAME)
+		return -E2BIG;
+
+	compressor = kstrdup(buf, GFP_KERNEL);
+	if (!compressor)
+		return -ENOMEM;
+
+	/* ignore trailing newline */
+	if (sz > 0 && compressor[sz - 1] == '\\n')
 		compressor[sz - 1] = '\\0';
 
-	if (!zcomp_available_algorithm(compressor))
+	if (!zcomp_available_algorithm(compressor)) {
+		kfree(compressor);
 		return -EINVAL;
+	}
 
 	down_write(&zram->init_lock);
 	if (init_done(zram)) {
 		up_write(&zram->init_lock);
+		kfree(compressor);
 		pr_info("Can't change algorithm for initialized device\\n");
 		return -EBUSY;
 	}
@@ -348,12 +368,24 @@ static void zram_destroy_comps(struct zram *zram)
 	u32 prio;
 
 	for (prio = 0; prio < ZRAM_MAX_COMPS; prio++) {
-		if (zram->comps[prio]) {
-			zcomp_destroy(zram->comps[prio]);
-			zram->comps[prio] = NULL;
-		}
+		struct zcomp *comp = zram->comps[prio];
+
+		zram->comps[prio] = NULL;
+		if (!comp)
+			continue;
+		zcomp_destroy(comp);
+		zram->num_active_comps--;
 	}
-	zram->num_active_comps = 0;
+
+	for (prio = ZRAM_PRIMARY_COMP; prio < ZRAM_MAX_COMPS; prio++) {
+		if (zram->comp_algs[prio] &&
+		    zram->comp_algs[prio] != default_compressor &&
+		    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
+		    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
+		    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
+			kfree(zram->comp_algs[prio]);
+		zram->comp_algs[prio] = NULL;
+	}
 }
 """
             idx_reset = zram_c.find("static void zram_reset_device(struct zram *zram)")
@@ -369,7 +401,7 @@ static void zram_destroy_comps(struct zram *zram)
 static int zram_read_from_zspool(struct zram *zram, struct page *page,
 				 u32 index)
 {
-	struct zcomp_strm *zstrm;
+	struct zcomp_strm *zstrm = NULL;
 	unsigned long handle;
 	unsigned int size;
 	void *src, *dst;
@@ -391,6 +423,10 @@ static int zram_read_from_zspool(struct zram *zram, struct page *page,
 	size = zram_get_obj_size(zram, index);
 
 	prio = zram_get_priority(zram, index);
+	/* 安全防御护栏：若次级流后端不存在，强制降级到 Primary 流 */
+	if (unlikely(prio >= ZRAM_MAX_COMPS || !zram->comps[prio]))
+		prio = ZRAM_PRIMARY_COMP;
+
 	if (size != PAGE_SIZE)
 		zstrm = zcomp_stream_get(zram->comps[prio]);
 
@@ -706,7 +742,18 @@ static DEVICE_ATTR_WO(recompress);
             if idx_reset_start != -1 and idx_reset_end != -1:
                 reset_block = zram_c[idx_reset_start:idx_reset_end]
                 new_reset_block = reset_block.replace("\tstruct zcomp *comp;\n", "").replace("\tcomp = zram->comp;\n", "")
-                repl = "\tzram_destroy_comps(zram);\n\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);\n"
+                repl = """\tzram_destroy_comps(zram);
+\tif (zcomp_available_algorithm("lz4"))
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
+\telse
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+\tif (zcomp_available_algorithm("zstd"))
+\t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
+\telse if (zcomp_available_algorithm("lz4hc"))
+\t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "lz4hc");
+#endif
+"""
                 t1 = "\tif (zram->comp)\n\t\tzcomp_destroy(zram->comp);\n\tzram->comp = NULL;\n"
                 t2 = "\tzcomp_destroy(zram->comp);\n\tzram->comp = NULL;\n"
                 t3 = "\tzcomp_destroy(comp);\n"
@@ -749,6 +796,17 @@ static DEVICE_ATTR_WO(recompress);
                 new_disksize_block = disksize_block.replace("struct zcomp *comp;", "struct zcomp *comp;\n\tint num_comps;")
                 if target_create in new_disksize_block:
                     new_disksize_block = new_disksize_block.replace(target_create, repl_create)
+
+                # 默认容量设置为物理内存大小
+                target_disksize_parse = """\tdisksize = memparse(buf, NULL);
+\tif (!disksize)
+\t\treturn -EINVAL;"""
+                repl_disksize_parse = """\tdisksize = memparse(buf, NULL);
+\tif (!disksize)
+\t\tdisksize = (u64)totalram_pages() << PAGE_SHIFT;"""
+                if target_disksize_parse in new_disksize_block:
+                    new_disksize_block = new_disksize_block.replace(target_disksize_parse, repl_disksize_parse)
+
                 target_out_free = """out_free_meta:
 	zram_meta_free(zram, disksize);"""
                 repl_out_free = """out_free_comps:
@@ -773,11 +831,21 @@ static DEVICE_ATTR_WO(recompress);
             if target_attrs in zram_c:
                 zram_c = zram_c.replace(target_attrs, repl_attrs)
 
-            # zram_add default_compressor
+            # zram_add default_compressor: 默认主算法lz4，次算法zstd/lz4hc
+            init_comps_code = """\tif (zcomp_available_algorithm("lz4"))
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
+\telse
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+\tif (zcomp_available_algorithm("zstd"))
+\t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
+\telse if (zcomp_available_algorithm("lz4hc"))
+\t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "lz4hc");
+#endif"""
             zram_c = zram_c.replace("strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));",
-                                    "comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);")
+                                    init_comps_code)
             zram_c = zram_c.replace("strscpy(zram->compressor, default_compressor, sizeof(zram->compressor));",
-                                    "comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);")
+                                    init_comps_code)
 
             with open(zram_drv_c_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(zram_c)
