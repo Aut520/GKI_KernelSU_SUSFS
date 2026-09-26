@@ -793,17 +793,18 @@ static DEVICE_ATTR_WO(recompress);
 		zram->comps[num_comps] = comp;
 		zram->num_active_comps++;
 	}"""
-                new_disksize_block = disksize_block.replace("struct zcomp *comp;", "struct zcomp *comp;\n\tint num_comps;")
+                new_disksize_block = disksize_block.replace("struct zcomp *comp;", "struct zcomp *comp;\n\tint num_comps;\n\tu64 max_limit;")
                 if target_create in new_disksize_block:
                     new_disksize_block = new_disksize_block.replace(target_create, repl_create)
 
-                # 默认容量设置为物理内存的 3/4 大小
+                # 智能上限约束：若未指定(0)或写入值超过物理内存 3/4(如系统默认100%)，自动对齐约束为 3/4
                 target_disksize_parse = """\tdisksize = memparse(buf, NULL);
 \tif (!disksize)
 \t\treturn -EINVAL;"""
-                repl_disksize_parse = """\tdisksize = memparse(buf, NULL);
-\tif (!disksize)
-\t\tdisksize = PAGE_ALIGN(((u64)totalram_pages() << PAGE_SHIFT) * 3 / 4);"""
+                repl_disksize_parse = """\tmax_limit = PAGE_ALIGN(((u64)totalram_pages() << PAGE_SHIFT) * 3 / 4);
+\tdisksize = memparse(buf, NULL);
+\tif (!disksize || disksize > max_limit)
+\t\tdisksize = max_limit;"""
                 if target_disksize_parse in new_disksize_block:
                     new_disksize_block = new_disksize_block.replace(target_disksize_parse, repl_disksize_parse)
 
