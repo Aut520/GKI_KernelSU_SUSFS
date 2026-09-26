@@ -96,6 +96,14 @@ on:
         required: false
         type: string
         default: "无"
+      enable_multi_comp:
+        required: false
+        type: boolean
+        default: false
+      patch_multi_comp:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-kernel:
@@ -122,6 +130,8 @@ jobs:
           echo "构建时间      : ${{ inputs.build_time }}"
           echo "SUSFS 状态    : ${{ inputs.enable_susfs }}"
           echo "ZRAM 增强     : ${{ inputs.use_zram }}"
+          echo "Multi-Comp 开启: ${{ inputs.enable_multi_comp }}"
+          echo "Multi-Comp 修补: ${{ inputs.patch_multi_comp }}"
           echo "BBG 补丁      : ${{ inputs.use_bbg }}"
           echo "KPM 功能      : ${{ inputs.use_kpm }}"
           echo "Re-Kernel     : ${{ inputs.use_rekernel }}"
@@ -1165,6 +1175,15 @@ jobs:
           if grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE" && grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE"; then
             cat "$ZZH_PATCHES/config/zram.config" >> "$CONFIG_FILE"
           fi
+
+      - name: 配置与修补 ZRAM Multi-Comp (多流二次重压缩)
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/manage_zram_multi_comp.sh" \
+            "$KERNEL_ROOT/common" \
+            "${{ inputs.kernel_version }}" \
+            "${{ inputs.enable_multi_comp }}" \
+            "${{ inputs.patch_multi_comp }}" \
+            "$DEFCONFIG"
 
       - name: 添加 BBG 防格机补丁
         if: inputs.use_bbg

@@ -122,6 +122,14 @@ on:
         description: "启用 ZRAM 增强算法"
         type: boolean
         default: false
+      enable_multi_comp:
+        description: "开启Multi-Comp(内核版本>=6.12)"
+        type: boolean
+        default: false
+      patch_multi_comp:
+        description: "开启Multi-Comp修补(修补不支持的版本)"
+        type: boolean
+        default: false
       use_bbg:
         description: "启用 BBG 防格机"
         type: boolean
@@ -172,6 +180,8 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       called_from_main: true
 
   # ==================== Android 13 - 5.15 构建 ====================
@@ -194,6 +204,8 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       called_from_main: true
 
   # ==================== Android 14 - 6.1 构建 ====================
@@ -217,6 +229,8 @@ jobs:
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
       fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       called_from_main: true
 
   # ==================== Android 15 - 6.6 构建 ====================
@@ -239,6 +253,8 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       called_from_main: true
 
   # ==================== Android 16 - 6.12 构建 ====================
@@ -261,6 +277,8 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       called_from_main: true
 
   # ==================== 收集补丁冲突文件 ====================

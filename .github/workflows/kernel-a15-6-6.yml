@@ -74,6 +74,16 @@ on:
         required: true
         type: boolean
         default: false
+      enable_multi_comp:
+        description: "开启Multi-Comp(内核版本>=6.12)"
+        required: false
+        type: boolean
+        default: false
+      patch_multi_comp:
+        description: "开启Multi-Comp修补(修补不支持的版本)"
+        required: false
+        type: boolean
+        default: false
       use_bbg:
         description: "启用 BBG 防格机"
         required: true
@@ -119,6 +129,14 @@ on:
       use_zram:
         required: true
         type: boolean
+      enable_multi_comp:
+        required: false
+        type: boolean
+        default: false
+      patch_multi_comp:
+        required: false
+        type: boolean
+        default: false
       use_bbg:
         required: true
         type: boolean
@@ -215,6 +233,8 @@ jobs:
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
       use_zram: ${{ inputs.use_zram }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       use_bbg: ${{ inputs.use_bbg }}
       use_kpm: ${{ inputs.use_kpm }}
       use_rekernel: ${{ inputs.use_rekernel || false }}

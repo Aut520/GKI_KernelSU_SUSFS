@@ -98,6 +98,16 @@ on:
         required: true
         type: boolean
         default: false
+      enable_multi_comp:
+        description: "开启Multi-Comp(内核版本>=6.12)"
+        required: false
+        type: boolean
+        default: false
+      patch_multi_comp:
+        description: "开启Multi-Comp修补(修补不支持的版本)"
+        required: false
+        type: boolean
+        default: false
       use_bbg:
         description: "启用 BBG 防格机"
         required: true
@@ -231,6 +241,8 @@ jobs:
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
       fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
+      enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
+      patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
 
   get-ksu-manager:
     uses: ./.github/workflows/get-manager.yml
