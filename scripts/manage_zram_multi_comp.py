@@ -831,6 +831,20 @@ static DEVICE_ATTR_WO(recompress);
             if target_attrs in zram_c:
                 zram_c = zram_c.replace(target_attrs, repl_attrs)
 
+            # zram_free_page: clear ZRAM_INCOMPRESSIBLE and priority to prevent WARN_ON_ONCE
+            target_free_idle = "\tif (zram_test_flag(zram, index, ZRAM_IDLE))\n\t\tzram_clear_flag(zram, index, ZRAM_IDLE);"
+            repl_free_idle = """\tif (zram_test_flag(zram, index, ZRAM_IDLE))
+\t\tzram_clear_flag(zram, index, ZRAM_IDLE);
+
+#ifdef CONFIG_ZRAM_MULTI_COMP
+\tif (zram_test_flag(zram, index, ZRAM_INCOMPRESSIBLE))
+\t\tzram_clear_flag(zram, index, ZRAM_INCOMPRESSIBLE);
+
+\tzram_set_priority(zram, index, 0);
+#endif"""
+            if target_free_idle in zram_c:
+                zram_c = zram_c.replace(target_free_idle, repl_free_idle)
+
             # zram_add default_compressor: 默认主算法lz4，次算法zstd/lz4hc
             init_comps_code = """\tif (zcomp_available_algorithm("lz4"))
 \t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
@@ -842,9 +856,9 @@ static DEVICE_ATTR_WO(recompress);
 \telse if (zcomp_available_algorithm("lz4hc"))
 \t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "lz4hc");
 #endif"""
-            zram_c = zram_c.replace("strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));",
+            zram_c = zram_c.replace("\tstrlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));",
                                     init_comps_code)
-            zram_c = zram_c.replace("strscpy(zram->compressor, default_compressor, sizeof(zram->compressor));",
+            zram_c = zram_c.replace("\tstrscpy(zram->compressor, default_compressor, sizeof(zram->compressor));",
                                     init_comps_code)
 
             with open(zram_drv_c_path, "w", encoding="utf-8", newline="\n") as f:
