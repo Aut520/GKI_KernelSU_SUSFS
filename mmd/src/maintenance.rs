@@ -110,7 +110,8 @@ impl ZramContext {
     }
 
     /// Performs one maintenance round (calculates dynamic cold threshold, marks idle, triggers recompression)
-    pub fn do_maintenance(&mut self, config: &MmdConfig) -> MaintenanceSummary {
+    /// If `force_all_idle` is true, writes 'all' to /sys/block/zramX/idle for immediate full recompression.
+    pub fn do_maintenance(&mut self, config: &MmdConfig, force_all_idle: bool) -> MaintenanceSummary {
         let start_time = Instant::now();
         let mut summary = MaintenanceSummary::default();
 
@@ -139,7 +140,31 @@ impl ZramContext {
             }
         }
 
-        if let Some(recompression) = self.zram_recompression.as_mut() {
+        if force_all_idle {
+            for zram in self.zram_devices.iter() {
+                info!("One-shot maintenance: Marking ALL pages as IDLE on zram{}...", zram.idx());
+                if let Err(e) = zram.set_idle("all") {
+                    warn!("Failed to write 'all' to /sys/block/zram{}/idle: {e:?}", zram.idx());
+                }
+                let trigger = if recompression_params.threshold_bytes > 0 {
+                    format!("type=idle threshold={}", recompression_params.threshold_bytes)
+                } else {
+                    "type=idle".to_string()
+                };
+                match zram.recompress(&trigger) {
+                    Ok(_) => {
+                        info!("ZRAM recompression successfully executed for all idle pages on zram{}", zram.idx());
+                        summary.recompress_success = true;
+                        summary.status_message = "Full recompression (all pages) succeeded".to_string();
+                    }
+                    Err(e) => {
+                        error!("Failed to execute ZRAM recompression on zram{}: {e:?}", zram.idx());
+                        summary.status_message = format!("Error: {e:?}");
+                    }
+                }
+                maintenance_active = true;
+            }
+        } else if let Some(recompression) = self.zram_recompression.as_mut() {
             for zram in self.zram_devices.iter() {
                 let ok = Self::execute_recompression(
                     zram,

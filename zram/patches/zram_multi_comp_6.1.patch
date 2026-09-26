@@ -75,7 +75,7 @@ index fb99592..f05ae8b 100644
 +	 */
 +	zram->table[index].flags &= ~(ZRAM_COMP_PRIORITY_MASK <<
 +				      ZRAM_COMP_PRIORITY_BIT1);
-+	zram->table[index].flags |= (prio << ZRAM_COMP_PRIORITY_BIT1);
++	zram->table[index].flags |= ((unsigned long)prio << ZRAM_COMP_PRIORITY_BIT1);
 +}
 +
 +static inline u32 zram_get_priority(struct zram *zram, u32 index)
@@ -871,7 +871,7 @@ index a2bda53..4733254 100644
  #define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)
  
 +/* Only 2 bits are allowed for comp priority index */
-+#define ZRAM_COMP_PRIORITY_MASK	0x3
++#define ZRAM_COMP_PRIORITY_MASK	0x3UL
 +
  /* Flags for zram pages (table[page_no].flags) */
  enum zram_pageflags {
