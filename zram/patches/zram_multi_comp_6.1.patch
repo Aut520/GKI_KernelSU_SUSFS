@@ -59,7 +59,7 @@ index 40f6420..cdefdef 100644
  
  struct zcomp_strm *zcomp_stream_get(struct zcomp *comp);
 diff --git a/drivers/block/zram/zram_drv.c b/drivers/block/zram/zram_drv.c
-index fb99592..9eda062 100644
+index fb99592..f05ae8b 100644
 --- a/drivers/block/zram/zram_drv.c
 +++ b/drivers/block/zram/zram_drv.c
 @@ -155,6 +155,26 @@ static inline bool is_partial_io(struct bio_vec *bvec)
@@ -781,7 +781,7 @@ index fb99592..9eda062 100644
  	disksize = memparse(buf, NULL);
  	if (!disksize)
 -		return -EINVAL;
-+		disksize = (u64)totalram_pages() << PAGE_SHIFT;
++		disksize = PAGE_ALIGN(((u64)totalram_pages() << PAGE_SHIFT) * 3 / 4);
  
  	down_write(&zram->init_lock);
  	if (init_done(zram)) {
