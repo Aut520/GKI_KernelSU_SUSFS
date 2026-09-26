@@ -69,7 +69,7 @@ pub fn get_zram_recompression_status<Z: SysfsZramApi>(
 ) -> std::io::Result<ZramRecompressionStatus> {
     match zram.read_recomp_algorithm() {
         Ok(recomp_algorithm) => {
-            if recomp_algorithm.is_empty() {
+            if recomp_algorithm.trim().is_empty() {
                 Ok(ZramRecompressionStatus::NotConfigured)
             } else {
                 Ok(ZramRecompressionStatus::Activated)
@@ -81,6 +81,7 @@ pub fn get_zram_recompression_status<Z: SysfsZramApi>(
         Err(e) => Err(e),
     }
 }
+
 
 /// The parameters for zram recompression.
 pub struct Params {
@@ -209,25 +210,38 @@ impl ZramRecompression {
             Mode::Huge => {}
         }
 
-        let mode = match mode {
+        let is_huge_idle = matches!(mode, Mode::HugeIdle);
+        let mode_str = match mode {
             Mode::HugeIdle => "huge_idle",
             Mode::Idle => "idle",
             Mode::Huge => "huge",
         };
 
         let trigger = if params.threshold_bytes > 0 {
-            format!("type={} threshold={}", mode, params.threshold_bytes)
+            format!("type={} threshold={}", mode_str, params.threshold_bytes)
         } else {
-            format!("type={mode}")
+            format!("type={mode_str}")
         };
 
-        zram.recompress(&trigger).map_err(Error::Recompress)?;
+        if let Err(e) = zram.recompress(&trigger) {
+            // Kernel compatibility fallback:
+            // Standard Linux 6.1/5.15 multi-comp sysfs accepts "type=idle" and "type=huge",
+            // but returns -EINVAL (InvalidInput) for "type=huge_idle".
+            // If huge_idle is rejected with InvalidInput, safely continue to the subsequent
+            // idle and huge passes rather than failing the whole maintenance cycle.
+            if is_huge_idle && e.kind() == std::io::ErrorKind::InvalidInput {
+                log::debug!("Kernel does not support type=huge_idle, falling back to separate idle and huge passes");
+                return Ok(());
+            }
+            return Err(Error::Recompress(e));
+        }
 
         self.last_recompress_at = Some(now);
 
         Ok(())
     }
 }
+
 
 // This is to suppress clippy::new_without_default.
 impl Default for ZramRecompression {
