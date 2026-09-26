@@ -824,7 +824,7 @@ index fb99592..7a47f9d 100644
  		goto out_cleanup_disk;
  
 -	strscpy(zram->compressor, default_compressor, sizeof(zram->compressor));
-+		if (zcomp_available_algorithm("lz4"))
++	if (zcomp_available_algorithm("lz4"))
 +		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
 +	else
 +		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);

@@ -900,10 +900,17 @@ def sanitize_zram_drv(kernel_root):
                 code = code.replace("\nout_free_meta:\n", "\n")
                 changed = True
 
+        # 3. 修复可能由制表符偏差引发的 -Wmisleading-indentation
+        bad_indent = "\t\tif (zcomp_available_algorithm(\"lz4\"))"
+        good_indent = "\tif (zcomp_available_algorithm(\"lz4\"))"
+        if bad_indent in code:
+            code = code.replace(bad_indent, good_indent)
+            changed = True
+
         if changed:
             with open(zram_c_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(code)
-            log("[OK] drivers/block/zram/zram_drv.c 自愈净化完成 (已消除 unused-variable 与 unused-label)")
+            log("[OK] drivers/block/zram/zram_drv.c 自愈净化完成 (已消除 unused-variable、unused-label 与 misleading-indentation)")
     except Exception as e:
         log(f"[WARN] zram_drv.c 自愈净化检查异常: {e}")
 
