@@ -797,13 +797,13 @@ static DEVICE_ATTR_WO(recompress);
                 if target_create in new_disksize_block:
                     new_disksize_block = new_disksize_block.replace(target_create, repl_create)
 
-                # 默认容量设置为物理内存大小
+                # 默认容量设置为物理内存的 3/4 大小
                 target_disksize_parse = """\tdisksize = memparse(buf, NULL);
 \tif (!disksize)
 \t\treturn -EINVAL;"""
                 repl_disksize_parse = """\tdisksize = memparse(buf, NULL);
 \tif (!disksize)
-\t\tdisksize = (u64)totalram_pages() << PAGE_SHIFT;"""
+\t\tdisksize = PAGE_ALIGN(((u64)totalram_pages() << PAGE_SHIFT) * 3 / 4);"""
                 if target_disksize_parse in new_disksize_block:
                     new_disksize_block = new_disksize_block.replace(target_disksize_parse, repl_disksize_parse)
 
