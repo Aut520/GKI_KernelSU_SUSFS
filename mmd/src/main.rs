@@ -9,12 +9,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
-use log::{info, LevelFilter};
+use log::info;
 use mmd::zram::recompression::{get_zram_recompression_status, ZramRecompressionStatus};
 use mmd::zram::stats::ZramMmStat;
 use mmd::zram::SysfsZramApi;
 
-use crate::config::MmdConfig;
+use crate::config::{format_duration_human, MmdConfig, MmdMode};
 use crate::daemon::MmdDaemon;
 use crate::maintenance::ZramContext;
 
@@ -22,23 +22,31 @@ fn print_help() {
     println!(r#"
 MMD (Memory Management Daemon) - Standalone ZRAM Multi-Comp Edition
 Usage:
-  mmd [OPTIONS]
+  mmd [MODE] [OPTIONS]
 
-Options:
+Modes:
   -d, --daemon            Run in autonomous daemon mode (default)
   -t, --trigger [-a]      Trigger one-shot ZRAM maintenance and exit
-                          Add -a, --all to force mark all pages as idle for immediate recompression test
+                          Add -a, --all to force mark all pages as idle for immediate testing
   -s, --status            Print comprehensive ZRAM status, multi-comp health and diagnostics
   -c, --client <CMD>      Send command to running daemon via UNIX socket (trigger, trigger_all, status, ping)
   -h, --help              Show this help message
 
-Environment Variables:
-  MMD_INTERVAL            Daemon check interval in seconds (default: 3600)
-  MMD_MIN_IDLE            Minimum idle age in seconds (default: 7200 = 2h)
-  MMD_MAX_IDLE            Maximum idle age in seconds (default: 14400 = 4h)
-  MMD_BACKOFF             Minimum duration between recompressions (default: 1800 = 30m)
-  MMD_THRESHOLD           Incompressible threshold in bytes (default: 1024)
-  MMD_SOCKET              UNIX domain socket path (default: /data/local/tmp/mmd.sock)
+Options (Applicable to daemon and one-shot trigger):
+  -i, --interval <DUR>    Maintenance loop interval (e.g. 1800, 30m, 1h, default: 3600)
+  -m, --min-idle <DUR>    Minimum idle age for cold page recompression (e.g. 3600, 1h, 2h, default: 7200)
+  -M, --max-idle <DUR>    Maximum idle age for cold page recompression (e.g. 7200, 2h, 4h, default: 14400)
+  -b, --backoff <DUR>     Minimum duration between consecutive recompressions (e.g. 1800, 30m, default: 1800)
+  -T, --threshold <BYTES> Skip recompression if page size is below this threshold (default: 1024)
+  -n, --devices <NUM>     Number of zram devices to manage (default: 1)
+  -S, --socket <PATH>     UNIX domain socket path (default: /data/local/tmp/mmd.sock)
+  -v, --verbose           Enable debug logging
+  -q, --quiet             Enable quiet logging (warnings and errors only)
+      --log-level <LEVEL> Set explicit log level: trace, debug, info, warn, error
+
+Supported Duration Units:
+  s (seconds), m (minutes), h (hours), d (days), or raw integer seconds.
+  Example: mmd -d -i 30m -m 1h
 "#);
 }
 
@@ -268,41 +276,47 @@ fn run_client(socket_path: &str, command: &str) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logging
+    let args: Vec<String> = std::env::args().collect();
+    let (mode, config) = match MmdConfig::parse_args_and_env(&args) {
+        Ok(res) => res,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    // Initialize logging with user-configured verbosity
     env_logger::Builder::from_default_env()
-        .filter_level(LevelFilter::Info)
+        .filter_level(config.log_level)
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
-    let config = MmdConfig::load_from_env();
-
-    let first_arg = args.get(1).map(|s| s.as_str()).unwrap_or("-d");
-
-    match first_arg {
-        "-h" | "--help" => {
+    match mode {
+        MmdMode::Help => {
             print_help();
             return Ok(());
         }
-        "-s" | "--status" => {
+        MmdMode::Status => {
             let context = ZramContext::new(config.num_devices);
             query_status(&context);
             return Ok(());
         }
-        "-t" | "--trigger" => {
-            let force_all = args.iter().any(|a| a == "-a" || a == "--all");
+        MmdMode::Trigger { force_all } => {
             let uptime_secs = read_uptime_secs().unwrap_or(0);
             let auto_all = !force_all && (uptime_secs > 0 && uptime_secs < config.min_idle_seconds);
-
             let effective_all = force_all || auto_all;
+
             if force_all {
                 info!("One-shot ZRAM maintenance trigger initiated with --all (force marking all pages as IDLE)...");
             } else if auto_all {
                 info!(
-                    "System uptime ({}s) is less than min_idle ({}s). Automatically marking all pages as IDLE for test trigger...",
-                    uptime_secs, config.min_idle_seconds
+                    "System uptime ({}s) is less than min_idle ({}). Automatically marking all pages as IDLE for test trigger...",
+                    uptime_secs, format_duration_human(config.min_idle_seconds)
                 );
             } else {
-                info!("One-shot ZRAM maintenance trigger initiated...");
+                info!(
+                    "One-shot ZRAM maintenance trigger initiated (min_idle: {})...",
+                    format_duration_human(config.min_idle_seconds)
+                );
             }
 
             let mut context = ZramContext::new(config.num_devices);
@@ -331,15 +345,24 @@ fn main() -> anyhow::Result<()> {
             println!("--------------------------------------------------");
             return Ok(());
         }
-        "-c" | "--client" => {
-            let cmd = args.get(2).map(|s| s.as_str()).unwrap_or("trigger");
-            if let Err(e) = run_client(&config.socket_path, cmd) {
+        MmdMode::Client(cmd) => {
+            if let Err(e) = run_client(&config.socket_path, &cmd) {
                 eprintln!("Failed to connect to mmd daemon at {}: {:?}", config.socket_path, e);
                 std::process::exit(1);
             }
             return Ok(());
         }
-        "-d" | "--daemon" | _ => {
+        MmdMode::Daemon => {
+            info!("==================================================");
+            info!("Starting MMD Daemon (Memory Management Daemon)");
+            info!("  Check Interval   : {}", format_duration_human(config.interval_seconds));
+            info!("  Min Idle Age     : {}", format_duration_human(config.min_idle_seconds));
+            info!("  Max Idle Age     : {}", format_duration_human(config.max_idle_seconds));
+            info!("  Backoff Window   : {}", format_duration_human(config.backoff_seconds));
+            info!("  Threshold Bytes  : {} bytes", config.threshold_bytes);
+            info!("  IPC Socket Path  : {}", config.socket_path);
+            info!("==================================================");
+
             let context = Arc::new(Mutex::new(ZramContext::new(config.num_devices)));
             let daemon = MmdDaemon::new(config, context);
             daemon.run()?;
