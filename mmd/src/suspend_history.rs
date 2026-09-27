@@ -43,7 +43,7 @@ use crate::time::TimeApi;
 /// kernel does not provides API to expose the boot time offset (The internal API is
 /// `ktime_get_offs_boot_ns()`).
 pub struct SuspendMonitor<T: TimeApi> {
-    monitonic_time: MonotonicTime,
+    monotonic_time: MonotonicTime,
     boot_time: BootTime,
     negative_adjustment: Duration,
     _phantom_data: PhantomData<T>,
@@ -53,7 +53,7 @@ impl<T: TimeApi> SuspendMonitor<T> {
     /// Creates [SuspendMonitor].
     pub fn new() -> Self {
         Self {
-            monitonic_time: T::get_monotonic_time(),
+            monotonic_time: T::get_monotonic_time(),
             boot_time: T::get_boot_time(),
             negative_adjustment: Duration::ZERO,
             _phantom_data: PhantomData,
@@ -68,7 +68,7 @@ impl<T: TimeApi> SuspendMonitor<T> {
         let monotonic_time = T::get_monotonic_time();
         let boot_time = T::get_boot_time();
 
-        let monotonic_diff = monotonic_time.saturating_duration_since(self.monitonic_time);
+        let monotonic_diff = monotonic_time.saturating_duration_since(self.monotonic_time);
         let boot_diff = boot_time.saturating_duration_since(self.boot_time);
 
         let suspend_duration = if boot_diff < monotonic_diff {
@@ -92,7 +92,7 @@ impl<T: TimeApi> SuspendMonitor<T> {
             }
         };
 
-        self.monitonic_time = monotonic_time;
+        self.monotonic_time = monotonic_time;
         self.boot_time = boot_time;
 
         (suspend_duration, boot_time)

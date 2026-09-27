@@ -68,11 +68,12 @@ on:
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
       fix_mi14p_flicker:
-        description: "补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁"
+        description: "补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁(>=6.1.140)"
         required: false
         type: choice
         options:
           - "无"
+          - "自动(>=6.1.140)"
           - "6.1.176"
         default: "无"
 
@@ -99,7 +100,7 @@ on:
         type: boolean
         default: false
       enable_multi_comp:
-        description: "开启Multi-Comp(内核版本>=6.12)"
+        description: "开启Multi-Comp(内核版本>=6.6)"
         required: false
         type: boolean
         default: false

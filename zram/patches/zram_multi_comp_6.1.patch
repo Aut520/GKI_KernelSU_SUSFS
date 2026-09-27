@@ -120,13 +120,8 @@ index fb99592..f05ae8b 100644
  {
 -	size_t sz;
 -	struct zram *zram = dev_to_zram(dev);
-+	/* 仅释放动态堆内存，不释放静态字符串常量 */
-+	if (zram->comp_algs[prio] &&
-+	    zram->comp_algs[prio] != default_compressor &&
-+	    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
-+	    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
-+	    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
-+		kfree(zram->comp_algs[prio]);
++	/* 仅释放动态堆内存，不释放内核只读数据段中的静态字符串常量 */
++	kfree_const(zram->comp_algs[prio]);
 +
 +	zram->comp_algs[prio] = alg;
 +}
@@ -606,6 +601,10 @@ index fb99592..f05ae8b 100644
 +				mode |= RECOMPRESS_HUGE;
 +				continue;
 +			}
++			if (!strcmp(param, "huge_idle")) {
++				mode |= (RECOMPRESS_IDLE | RECOMPRESS_HUGE);
++				continue;
++			}
 +			return -EINVAL;
 +		}
 +
@@ -614,6 +613,8 @@ index fb99592..f05ae8b 100644
 +				mode |= RECOMPRESS_IDLE;
 +			else if (!strcmp(val, "huge"))
 +				mode |= RECOMPRESS_HUGE;
++			else if (!strcmp(val, "huge_idle"))
++				mode |= (RECOMPRESS_IDLE | RECOMPRESS_HUGE);
 +			else
 +				return -EINVAL;
 +			continue;
@@ -744,12 +745,7 @@ index fb99592..f05ae8b 100644
 +	}
 +
 +	for (prio = ZRAM_PRIMARY_COMP; prio < ZRAM_MAX_COMPS; prio++) {
-+		if (zram->comp_algs[prio] &&
-+		    zram->comp_algs[prio] != default_compressor &&
-+		    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
-+		    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
-+		    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
-+			kfree(zram->comp_algs[prio]);
++		kfree_const(zram->comp_algs[prio]);
 +		zram->comp_algs[prio] = NULL;
 +	}
 +}

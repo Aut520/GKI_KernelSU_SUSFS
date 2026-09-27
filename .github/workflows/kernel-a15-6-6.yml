@@ -75,7 +75,7 @@ on:
         type: boolean
         default: false
       enable_multi_comp:
-        description: "开启Multi-Comp(内核版本>=6.12)"
+        description: "开启Multi-Comp(内核版本>=6.6)"
         required: false
         type: boolean
         default: false

@@ -216,14 +216,8 @@ static inline u32 zram_get_priority(struct zram *zram, u32 index)
             if idx_comp_alg != -1 and idx_compact != -1:
                 repl_comp_alg = """static void comp_algorithm_set(struct zram *zram, u32 prio, const char *alg)
 {
-	/* 仅释放动态堆内存，不释放静态字符串常量 */
-	if (zram->comp_algs[prio] &&
-	    zram->comp_algs[prio] != default_compressor &&
-	    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
-	    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
-	    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
-		kfree(zram->comp_algs[prio]);
-
+	/* 仅释放动态堆内存，不释放内核只读数据段中的静态字符串常量 */
+	kfree_const(zram->comp_algs[prio]);
 	zram->comp_algs[prio] = alg;
 }
 
@@ -382,12 +376,7 @@ static void zram_destroy_comps(struct zram *zram)
 	}
 
 	for (prio = ZRAM_PRIMARY_COMP; prio < ZRAM_MAX_COMPS; prio++) {
-		if (zram->comp_algs[prio] &&
-		    zram->comp_algs[prio] != default_compressor &&
-		    strcmp(zram->comp_algs[prio], "lz4") != 0 &&
-		    strcmp(zram->comp_algs[prio], "zstd") != 0 &&
-		    strcmp(zram->comp_algs[prio], "lz4hc") != 0)
-			kfree(zram->comp_algs[prio]);
+		kfree_const(zram->comp_algs[prio]);
 		zram->comp_algs[prio] = NULL;
 	}
 }
@@ -629,6 +618,10 @@ static ssize_t recompress_store(struct device *dev,
 				mode |= RECOMPRESS_HUGE;
 				continue;
 			}
+			if (!strcmp(param, "huge_idle")) {
+				mode |= (RECOMPRESS_IDLE | RECOMPRESS_HUGE);
+				continue;
+			}
 			return -EINVAL;
 		}
 
@@ -637,6 +630,8 @@ static ssize_t recompress_store(struct device *dev,
 				mode |= RECOMPRESS_IDLE;
 			else if (!strcmp(val, "huge"))
 				mode |= RECOMPRESS_HUGE;
+			else if (!strcmp(val, "huge_idle"))
+				mode |= (RECOMPRESS_IDLE | RECOMPRESS_HUGE);
 			else
 				return -EINVAL;
 			continue;
