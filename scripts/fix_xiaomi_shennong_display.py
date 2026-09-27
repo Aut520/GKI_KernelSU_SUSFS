@@ -179,15 +179,36 @@ def fix_cpu_idle_tick(kernel_root):
         with open(target, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
 
-        if "idle_call_stop_or_retain_tick(stop_tick);" in content:
+        changed = False
+        # 1. 优先接管 6.1.176 上游新增的 static 辅助函数体，彻底杜绝 -Wunused-function 错误
+        pattern_func = re.compile(
+            r'(static\s+void\s+idle_call_stop_or_retain_tick\s*\(\s*bool\s+stop_tick\s*\)\s*\{)[\s\S]*?(\n\})',
+            re.MULTILINE
+        )
+        if pattern_func.search(content):
             replacement = (
-                "/* 保证微秒级定时器准时响应，避免背光平滑插值抖动 (补丁群4) */\n"
-                "\ttick_nohz_idle_stop_tick();"
+                r'\1\n'
+                '\t/* 保证微秒级定时器准时响应，避免背光平滑插值抖动 (补丁群4) */\n'
+                '\ttick_nohz_idle_stop_tick();'
+                r'\2'
             )
-            content = content.replace("idle_call_stop_or_retain_tick(stop_tick);", replacement)
-            with open(target, "w", encoding="utf-8") as f:
+            content, count = pattern_func.subn(replacement, content, count=1)
+            if count > 0:
+                changed = True
+                log("[OK] 已成功接管 idle_call_stop_or_retain_tick 函数体 (0 告警规避 -Wunused-function)")
+        elif "idle_call_stop_or_retain_tick(stop_tick);" in content:
+            # 兼容没有该 static 函数但有调用点的特殊基线
+            content = content.replace(
+                "idle_call_stop_or_retain_tick(stop_tick);",
+                "/* 补丁群4 */ tick_nohz_idle_stop_tick();"
+            )
+            changed = True
+            log("[OK] 已成功替换 idle_call_stop_or_retain_tick 调用点")
+
+        if changed:
+            with open(target, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
-            log("[OK] 已成功修复 CPU Idle 定时器唤醒防护 (防止 VSYNC 抖动与背光插值闪烁)")
+            log("[OK] CPU Idle 定时器唤醒防护修复完成")
         else:
             log("[INFO] kernel/sched/idle.c 无需修改或已具备定时器防护")
     except Exception as e:
