@@ -110,7 +110,7 @@ index fb99592..f05ae8b 100644
  
  		if (count <= copied) {
  			zram_slot_unlock(zram, index);
-@@ -1006,47 +1031,156 @@ static ssize_t max_comp_streams_store(struct device *dev,
+@@ -1006,47 +1031,151 @@ static ssize_t max_comp_streams_store(struct device *dev,
  	return len;
  }
  
@@ -459,7 +459,7 @@ index fb99592..f05ae8b 100644
  	}
  	zram_slot_unlock(zram, index);
  
-@@ -1650,6 +1811,251 @@ static void zram_submit_bio(struct bio *bio)
+@@ -1650,6 +1811,265 @@ static void zram_submit_bio(struct bio *bio)
  	__zram_make_request(zram, bio);
  }
  
@@ -725,7 +725,7 @@ index fb99592..f05ae8b 100644
  static void zram_slot_free_notify(struct block_device *bdev,
  				unsigned long index)
  {
-@@ -1722,6 +2128,32 @@ out:
+@@ -1722,6 +2128,27 @@ out:
  	return ret;
  }
  
