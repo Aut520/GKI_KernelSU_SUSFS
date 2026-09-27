@@ -70,7 +70,7 @@ def fix_drm_atomic_helper(kernel_root):
 
         if "failed valid clone check for mask" in content:
             pattern = re.compile(
-                r'(failed valid clone check for mask 0x%x\\n[\s\S]*?)(return\s+-EINVAL;)',
+                r'(failed valid clone check for mask[\s\S]*?)(return\s+-EINVAL;)',
                 re.MULTILINE
             )
             new_content, count = pattern.subn(r'\1return 0; /* 放宽克隆检测以兼容 vendor 驱动 */', content)
@@ -93,12 +93,25 @@ def fix_drm_fourcc(kernel_root):
             content = f.read()
 
         changed = False
-        if "DIV_ROUND_UP(width, info->hsub)" in content:
-            content = content.replace("return DIV_ROUND_UP(width, info->hsub);", "return width / info->hsub;")
-            changed = True
-        if "DIV_ROUND_UP(height, info->vsub)" in content:
-            content = content.replace("return DIV_ROUND_UP(height, info->vsub);", "return height / info->vsub;")
-            changed = True
+        if "DIV_ROUND_UP" in content and "hsub" in content:
+            new_content, c1 = re.subn(
+                r'return\s+DIV_ROUND_UP\s*\(\s*width\s*,\s*info->hsub\s*\)\s*;',
+                'return width / info->hsub;',
+                content
+            )
+            if c1 > 0:
+                content = new_content
+                changed = True
+
+        if "DIV_ROUND_UP" in content and "vsub" in content:
+            new_content, c2 = re.subn(
+                r'return\s+DIV_ROUND_UP\s*\(\s*height\s*,\s*info->vsub\s*\)\s*;',
+                'return height / info->vsub;',
+                content
+            )
+            if c2 > 0:
+                content = new_content
+                changed = True
 
         if changed:
             with open(target, "w", encoding="utf-8") as f:
@@ -152,12 +165,14 @@ DECLARE_HOOK(android_vh_allow_domain_state,
             modified = False
             if "android_vh_allow_domain_state" not in vh_content:
                 if "#include <trace/hooks/pm_domain.h>" not in vh_content:
-                    vh_content = re.sub(
+                    vh_content, sub_c = re.subn(
                         r'(#include <trace/hooks/.*?>\n)',
                         r'\1#include <trace/hooks/pm_domain.h>\n',
                         vh_content,
                         count=1
                     )
+                    if sub_c == 0:
+                        vh_content = "#include <trace/hooks/pm_domain.h>\n" + vh_content
                 vh_content += "\nEXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_allow_domain_state);\n"
                 modified = True
 
@@ -188,6 +203,7 @@ def fix_cpu_idle_tick(kernel_root):
         if pattern_func.search(content):
             replacement = (
                 r'\1\n'
+                '\t(void)stop_tick;\n'
                 '\t/* 保证微秒级定时器准时响应，避免背光平滑插值抖动 (补丁群4) */\n'
                 '\ttick_nohz_idle_stop_tick();'
                 r'\2'
@@ -273,12 +289,14 @@ DECLARE_HOOK(android_vh_freq_table_limits,
             modified = False
             if "android_vh_freq_table_limits" not in vh_c:
                 if "#include <trace/hooks/cpufreq.h>" not in vh_c:
-                    vh_c = re.sub(
+                    vh_c, sub_c = re.subn(
                         r'(#include <trace/hooks/.*?>\n)',
                         r'\1#include <trace/hooks/cpufreq.h>\n',
                         vh_c,
                         count=1
                     )
+                    if sub_c == 0:
+                        vh_c = "#include <trace/hooks/cpufreq.h>\n" + vh_c
                 vh_c += "\nEXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_freq_table_limits);\n"
                 modified = True
             if modified:
