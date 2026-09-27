@@ -1292,6 +1292,10 @@ jobs:
             set_config "CONFIG_$cfg" y
           done
 
+          # 固化默认队列调度器为 FQ（BBRv3 黄金伴侣）
+          set_config CONFIG_NET_SCH_DEFAULT y
+          set_config CONFIG_DEFAULT_FQ y
+
           # CIFS 网络文件系统（由内核 Kconfig 自动解析依赖，严禁手动注入无 prompt 符号）
           for cfg in CIFS NETWORK_FILESYSTEMS KEYS CIFS_XATTR CIFS_POSIX; do
             set_config "CONFIG_$cfg" y
