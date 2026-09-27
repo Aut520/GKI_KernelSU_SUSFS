@@ -1,0 +1,6 @@
+# Unified patch payloads intentionally preserve space-prefixed blank context
+# lines and kernel-style tab indentation.
+*.patch text eol=lf -whitespace
+*.sh text eol=lf
+*.py text eol=lf
+
