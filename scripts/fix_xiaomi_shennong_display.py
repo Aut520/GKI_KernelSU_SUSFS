@@ -43,7 +43,7 @@ def fix_dpu_encoder_phys_cmd(kernel_root):
                 re.MULTILINE
             )
             replacement = (
-                "if (phys_enc->hw_ctl->ops.is_started(phys_enc->hw_ctl))\n"
+                "\tif (phys_enc->hw_ctl->ops.is_started(phys_enc->hw_ctl))\n"
                 "\t\treturn dpu_encoder_phys_cmd_wait_for_tx_complete(phys_enc);\n\n"
                 "\treturn _dpu_encoder_phys_cmd_wait_for_ctl_start(phys_enc);"
             )
@@ -132,7 +132,7 @@ def fix_pm_domain_vendor_hooks(kernel_root):
 struct generic_pm_domain;
 DECLARE_HOOK(android_vh_allow_domain_state,
 	TP_PROTO(struct generic_pm_domain *genpd, uint32_t idx, bool *allow),
-	TP_ARGS(genpd, idx, allow))
+	TP_ARGS(genpd, idx, allow));
 
 #endif /* _TRACE_HOOK_PM_DOMAIN_H */
 

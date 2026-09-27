@@ -110,7 +110,7 @@ index ddd32c9..fed7147 100644
  
  		if (count <= copied) {
  			zram_slot_unlock(zram, index);
-@@ -988,47 +1013,156 @@ static ssize_t max_comp_streams_store(struct device *dev,
+@@ -988,47 +1013,151 @@ static ssize_t max_comp_streams_store(struct device *dev,
  	return len;
  }
  
@@ -445,7 +445,7 @@ index ddd32c9..fed7147 100644
  	}
  	zram_slot_unlock(zram, index);
  
-@@ -1623,6 +1784,251 @@ error:
+@@ -1623,6 +1784,265 @@ error:
  	return BLK_QC_T_NONE;
  }
  
@@ -711,7 +711,7 @@ index ddd32c9..fed7147 100644
  static void zram_slot_free_notify(struct block_device *bdev,
  				unsigned long index)
  {
-@@ -1694,9 +2100,34 @@ out:
+@@ -1694,9 +2100,29 @@ out:
  	return ret;
  }
  
@@ -857,7 +857,7 @@ diff --git a/drivers/block/zram/zram_drv.h b/drivers/block/zram/zram_drv.h
 index 80c3b43..bdfbd9c 100644
 --- a/drivers/block/zram/zram_drv.h
 +++ b/drivers/block/zram/zram_drv.h
-@@ -40,6 +40,9 @@
+@@ -40,5 +40,8 @@
   */
  #define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)
  

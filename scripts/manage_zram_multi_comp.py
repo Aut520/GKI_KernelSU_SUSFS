@@ -953,7 +953,7 @@ def apply_patch(kernel_root, patch_file, kernel_version):
         patch_name = os.path.basename(patch_file)
         log(f"[INFO] [轨道1] 正在尝试 git apply 应用 {kernel_version} 驱动补丁 ({patch_name})...")
         try:
-            git_cmd = ["git", "apply", "--whitespace=fix", patch_file]
+            git_cmd = ["git", "apply", "--whitespace=fix", "--recount", patch_file]
             git_res = subprocess.run(git_cmd, cwd=kernel_root, capture_output=True, text=True)
             if git_res.returncode == 0:
                 log(f"[OK] [轨道1] 通过 git apply 成功打入 {kernel_version} Multi-Comp 驱动补丁！")
