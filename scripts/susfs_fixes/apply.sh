@@ -181,6 +181,27 @@ if [[ -f fs/statfs.c ]] && grep -qF 'susfs_sus_kstat_spoof_vfs_statfs(' fs/statf
   fi
 fi
 
+# 修复 6.1/5.15 namespace.c: 若头部 Hunk #1 因头文件上下文失配，函数体使用 susfs_mnt_id_ida 等符号会导致编译报错
+if [[ -f fs/namespace.c ]] && grep -q 'DEFAULT_KSU_MNT_ID\|susfs_mnt_id_ida' fs/namespace.c && ! grep -qF '#include <linux/susfs_def.h>' fs/namespace.c; then
+  echo "检测到 fs/namespace.c 缺少 susfs_def.h 及声明，自动补全注入..."
+  if grep -qF '#include <linux/mnt_idmapping.h>' fs/namespace.c; then
+    sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif' fs/namespace.c
+  elif grep -qF '#include <linux/shmem_fs.h>' fs/namespace.c; then
+    sed -i '/#include <linux\/shmem_fs.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif' fs/namespace.c
+  else
+    sed -i '0,/^#include /s//#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif\n&/' fs/namespace.c
+  fi
+
+  if ! grep -q 'extern bool susfs_is_current_ksu_domain' fs/namespace.c; then
+    if grep -qF '#include "internal.h"' fs/namespace.c; then
+      sed -i '/#include "internal.h"/a \\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25)\n\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n\n#endif' fs/namespace.c
+    else
+      sed -i '/#include <linux\/susfs_def.h>/a \\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25)\n\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n\n#endif' fs/namespace.c
+    fi
+  fi
+  rm -f fs/namespace.c.rej
+fi
+
 # 在编译前报告 SUSFS 主补丁产生的冲突文件，上游自带的 .rej 不计入
 mapfile -t SUSFS_REJ_FILES < <(list_untracked_rej)
 SUSFS_REJ_COUNT=${#SUSFS_REJ_FILES[@]}
