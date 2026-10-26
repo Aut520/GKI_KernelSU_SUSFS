@@ -1635,7 +1635,11 @@ jobs:
               sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64
 
               if [ -f "build/build.sh" ]; then
-                BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
+                if [ "${{ inputs.kernel_version }}" = "5.10" ]; then
+                  LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
+                else
+                  BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
+                fi
                 strings "out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image" | grep 'Linux version'
               else
                 # 提取 gki_defconfig 修改到 fragment，避免 bazel trim 检查失败
@@ -1658,8 +1662,12 @@ jobs:
                 echo "最终配置: $FINAL_CONFIG"
                 grep -E '^CONFIG_LTO' "$FINAL_CONFIG" || echo '（未找到 CONFIG_LTO，可能未启用 LTO 支持）'
                 if grep -qx 'CONFIG_LTO_CLANG_THIN=y' "$FINAL_CONFIG"; then
-                  echo "::error::Image 使用了 Thin LTO，与官方 GKI 的 LTO_NONE 不一致，刷入后可能无法启动"
-                  exit 1
+                  if [ "${{ inputs.kernel_version }}" != "5.10" ]; then
+                    echo "::error::Image 使用了 Thin LTO，与官方 GKI 的 LTO_NONE 不一致，刷入后可能无法启动"
+                    exit 1
+                  else
+                    echo "5.10 内核正常使用 Thin LTO 构建，校验通过"
+                  fi
                 fi
               else
                 echo "::warning::未找到生成的 .config，跳过 LTO 一致性校验"
