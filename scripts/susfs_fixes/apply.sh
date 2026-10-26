@@ -35,6 +35,11 @@ case "$KSU_VARIANT" in
     cp "$SUSFS4KSU"/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
     patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
 
+    # 修复 5.10 (Linux < 5.11) 缺少 close_fd() 函数定义，回退至 ksu_close_fd
+    if [[ "$KERNEL_VERSION" == "5.10" && -f "kernel/preinit/preinit.c" ]]; then
+      sed -i 's/\bclose_fd(/ksu_close_fd(/g' kernel/preinit/preinit.c
+    fi
+
     cd ..
     ;;
   "Next"|"SukiSU"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU")
@@ -303,6 +308,9 @@ if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
   # 修复 2024-11 分支: mmap.c 调用了 vm_flags_clear()，但同分支 mm.h 未提供 helper
   fix_missing_vm_flags_clear
   fix_task_mmu_show_pad 209
+  if [[ -f "drivers/kernelsu/preinit/preinit.c" ]]; then
+    sed -i 's/\bclose_fd(/ksu_close_fd(/g' drivers/kernelsu/preinit/preinit.c
+  fi
 fi
 
 # Android 13 - 5.15 修复
