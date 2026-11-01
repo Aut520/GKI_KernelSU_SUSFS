@@ -8,8 +8,8 @@ on:
 jobs:
   check-and-trigger:
     runs-on: ubuntu-24.04
-    # 仅允许指定仓库所有者触发自动构建
-    if: contains(fromJSON('["zzh20188", "elysias123"]'), github.repository_owner)
+    # 允许当前仓库所有者触发自动构建
+    if: github.repository_owner == 'Aut520' || contains(fromJSON('["zzh20188", "elysias123"]'), github.repository_owner)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -82,3 +82,11 @@ jobs:
           git add latest_sha.txt
           git commit -m "Update SukiSU latest SHA to ${{ steps.get_sha.outputs.sha }}" || exit 0
           git push origin sha
+
+      - name: 触发主构建工作流
+        if: steps.compare.outputs.new_commit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "检测到 SukiSU 发生更新，触发主构建工作流..."
+          gh workflow run main.yml --ref ${{ github.ref_name }} || echo "无法通过 gh cli 触发 main.yml，跳过"

@@ -578,8 +578,12 @@ jobs:
         if: inputs.supp_op
         working-directory: ${{ env.KERNEL_ROOT }}/common/drivers
         run: |
-          echo "下载一加 8E 支持补丁..."
-          curl -LSs "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c" -o hmbird_patch.c
+          echo "准备一加 8E 支持补丁..."
+          if [ -f "$GITHUB_WORKSPACE/hmbird_patch.c" ]; then
+            cp "$GITHUB_WORKSPACE/hmbird_patch.c" ./hmbird_patch.c
+          else
+            curl -LSs "https://github.com/${{ github.repository }}/raw/refs/heads/dev/hmbird_patch.c" -o hmbird_patch.c
+          fi
           echo "obj-y += hmbird_patch.o" >> Makefile
 
       - name: 补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁
