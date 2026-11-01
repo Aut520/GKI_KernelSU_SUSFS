@@ -30,7 +30,7 @@ on:
           - SukiSU(40726)
           - SukiSU(40548)
           - BakaSU
-        default: BakaSU
+        default: Official
       ksu_mode:
         description: "KernelSU / SUSFS 模式"
         required: true
@@ -98,7 +98,7 @@ on:
         description: "启用 ZRAM 增强算法"
         required: true
         type: boolean
-        default: false
+        default: true
       enable_multi_comp:
         description: "开启Multi-Comp(内核版本>=6.6)"
         required: false
@@ -113,7 +113,7 @@ on:
         description: "启用 BBG 防格机"
         required: true
         type: boolean
-        default: false
+        default: true
       use_rekernel:
         description: "启用 Re-Kernel 驱动"
         required: false
@@ -123,17 +123,17 @@ on:
         description: "启用 NoMount 挂载元模块"
         required: false
         type: boolean
-        default: false
+        default: true
       use_networking:
         description: "启用网络增强（BBRv3 / IPSet / Qdisc / CIFS）"
         required: false
         type: boolean
-        default: false
+        default: true
       cve_2026_43499_patch:
         description: "应用 CVE-2026-43499 rtmutex 修复链"
         required: false
         type: boolean
-        default: false
+        default: true
       supp_op:
         description: "启用一加 8E 支持"
         required: false
