@@ -125,10 +125,16 @@ def fix_pm_domain_vendor_hooks(kernel_root):
     domain_governor_c = os.path.join(kernel_root, "drivers/base/power/domain_governor.c")
 
     try:
-        # 1. 如果缺失 include/trace/hooks/pm_domain.h，重新创建它
+        # 1. 确保 include/trace/hooks/pm_domain.h 声明了 android_vh_allow_domain_state
+        hook_decl = (
+            "\nstruct generic_pm_domain;\n"
+            "DECLARE_HOOK(android_vh_allow_domain_state,\n"
+            "\tTP_PROTO(struct generic_pm_domain *genpd, uint32_t idx, bool *allow),\n"
+            "\tTP_ARGS(genpd, idx, allow));\n"
+        )
         if not os.path.isfile(pm_domain_h):
             os.makedirs(os.path.dirname(pm_domain_h), exist_ok=True)
-            pm_content = """/* SPDX-License-Identifier: GPL-2.0 */
+            pm_content = f"""/* SPDX-License-Identifier: GPL-2.0 */
 
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM pm_domain
@@ -139,21 +145,28 @@ def fix_pm_domain_vendor_hooks(kernel_root):
 #define _TRACE_HOOK_PM_DOMAIN_H
 
 #include <trace/hooks/vendor_hooks.h>
-
-struct generic_pm_domain;
-DECLARE_HOOK(android_vh_allow_domain_state,
-	TP_PROTO(struct generic_pm_domain *genpd, uint32_t idx, bool *allow),
-	TP_ARGS(genpd, idx, allow));
-
+{hook_decl}
 #endif /* _TRACE_HOOK_PM_DOMAIN_H */
 
 #include <trace/define_trace.h>
 """
             with open(pm_domain_h, "w", encoding="utf-8") as f:
                 f.write(pm_content)
-            log("[OK] 已补齐缺失的 include/trace/hooks/pm_domain.h")
+            log("[OK] 已创建 include/trace/hooks/pm_domain.h 并声明 android_vh_allow_domain_state")
         else:
-            log("[INFO] include/trace/hooks/pm_domain.h 已存在")
+            with open(pm_domain_h, "r", encoding="utf-8", errors="replace") as f:
+                pm_content = f.read()
+            if "android_vh_allow_domain_state" not in pm_content:
+                pos = pm_content.rfind("#endif")
+                if pos != -1:
+                    pm_content = pm_content[:pos] + hook_decl + "\n" + pm_content[pos:]
+                else:
+                    pm_content += hook_decl
+                with open(pm_domain_h, "w", encoding="utf-8") as f:
+                    f.write(pm_content)
+                log("[OK] 已向现有 include/trace/hooks/pm_domain.h 追加声明 android_vh_allow_domain_state")
+            else:
+                log("[INFO] include/trace/hooks/pm_domain.h 中已声明 android_vh_allow_domain_state")
 
         # 2. 在 drivers/android/vendor_hooks.c 导出 android_vh_allow_domain_state
         if os.path.isfile(vendor_hooks_c):
@@ -189,7 +202,10 @@ DECLARE_HOOK(android_vh_allow_domain_state,
             if "trace_android_vh_allow_domain_state" not in dg_content:
                 # 注入头文件
                 if "#include <trace/hooks/pm_domain.h>" not in dg_content:
-                    dg_content = "#include <trace/hooks/pm_domain.h>\n" + dg_content
+                    if "#include <linux/pm_domain.h>" in dg_content:
+                        dg_content = dg_content.replace("#include <linux/pm_domain.h>", "#include <linux/pm_domain.h>\n#include <trace/hooks/pm_domain.h>", 1)
+                    else:
+                        dg_content = "#include <trace/hooks/pm_domain.h>\n" + dg_content
 
                 # 在 __default_power_down_ok 中 genpd 声明之后注入调用点
                 target_anchor = "bool allow = true;"
@@ -264,10 +280,16 @@ def fix_cpufreq_vendor_hooks(kernel_root):
     freq_table_c = os.path.join(kernel_root, "drivers/cpufreq/freq_table.c")
 
     try:
-        # 1. 如果缺失 include/trace/hooks/cpufreq.h，自动创建它
+        # 1. 确保 include/trace/hooks/cpufreq.h 声明了 android_vh_freq_table_limits
+        hook_decl = (
+            "\nstruct cpufreq_policy;\n"
+            "DECLARE_HOOK(android_vh_freq_table_limits,\n"
+            "\tTP_PROTO(struct cpufreq_policy *policy, unsigned int min_freq, unsigned int max_freq),\n"
+            "\tTP_ARGS(policy, min_freq, max_freq));\n"
+        )
         if not os.path.isfile(cpufreq_h):
             os.makedirs(os.path.dirname(cpufreq_h), exist_ok=True)
-            cpufreq_content = """/* SPDX-License-Identifier: GPL-2.0 */
+            cpufreq_content = f"""/* SPDX-License-Identifier: GPL-2.0 */
 
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM cpufreq
@@ -278,21 +300,28 @@ def fix_cpufreq_vendor_hooks(kernel_root):
 #define _TRACE_HOOK_CPUFREQ_H
 
 #include <trace/hooks/vendor_hooks.h>
-
-struct cpufreq_policy;
-DECLARE_HOOK(android_vh_freq_table_limits,
-	TP_PROTO(struct cpufreq_policy *policy, unsigned int min_freq, unsigned int max_freq),
-	TP_ARGS(policy, min_freq, max_freq));
-
+{hook_decl}
 #endif /* _TRACE_HOOK_CPUFREQ_H */
 
 #include <trace/define_trace.h>
 """
             with open(cpufreq_h, "w", encoding="utf-8") as f:
                 f.write(cpufreq_content)
-            log("[OK] 已补齐缺失的 include/trace/hooks/cpufreq.h")
+            log("[OK] 已创建 include/trace/hooks/cpufreq.h 并声明 android_vh_freq_table_limits")
         else:
-            log("[INFO] include/trace/hooks/cpufreq.h 已存在")
+            with open(cpufreq_h, "r", encoding="utf-8", errors="replace") as f:
+                h_content = f.read()
+            if "android_vh_freq_table_limits" not in h_content:
+                pos = h_content.rfind("#endif")
+                if pos != -1:
+                    h_content = h_content[:pos] + hook_decl + "\n" + h_content[pos:]
+                else:
+                    h_content += hook_decl
+                with open(cpufreq_h, "w", encoding="utf-8") as f:
+                    f.write(h_content)
+                log("[OK] 已向现有 include/trace/hooks/cpufreq.h 追加声明 android_vh_freq_table_limits")
+            else:
+                log("[INFO] include/trace/hooks/cpufreq.h 中已存在 android_vh_freq_table_limits")
 
         # 2. 在 drivers/android/vendor_hooks.c 导出 android_vh_freq_table_limits
         if os.path.isfile(vendor_hooks_c):
@@ -326,7 +355,10 @@ DECLARE_HOOK(android_vh_freq_table_limits,
 
             if "trace_android_vh_freq_table_limits" not in ft_content:
                 if "#include <trace/hooks/cpufreq.h>" not in ft_content:
-                    ft_content = "#include <trace/hooks/cpufreq.h>\n" + ft_content
+                    if "#include <linux/cpufreq.h>" in ft_content:
+                        ft_content = ft_content.replace("#include <linux/cpufreq.h>", "#include <linux/cpufreq.h>\n#include <trace/hooks/cpufreq.h>", 1)
+                    else:
+                        ft_content = "#include <trace/hooks/cpufreq.h>\n" + ft_content
 
                 anchor_target = "policy->min = policy->cpuinfo.min_freq = min_freq;"
                 if anchor_target in ft_content:
