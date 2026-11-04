@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 小米 14 Pro (shennong, SM8650) 全系统驱动补全与屏幕闪烁修复脚本
-针对 Android 14 6.1.140+ (如 6.1.176) GKI 内核与原厂基于 6.1.138 编译的 vendor 驱动模块协同问题：
+写死专用于 Android 14 6.1.176 GKI 内核与原厂基于 6.1.138 编译的 vendor 驱动模块协同问题：
 1. 修复 DPU 物理编码器提交等待时序 (dpu_encoder_phys_cmd_wait_for_commit_done)
 2. 放宽 DRM Atomic Modeset 克隆检查 (drm_atomic_check_valid_clones)
 3. 还原 DRM 图层尺寸对齐计算 (drm_format_info_plane_width/height)
-4. 恢复被 Google 删除的 pm_domain 与 cpufreq Vendor Hooks 供电域与总线调度
+4. 恢复被 Google 删除的 pm_domain 与 cpufreq Vendor Hooks 声明、导出及实际调用点
 5. 修复 CPU Idle 定时器唤醒防护，防止 VSYNC 抖动与背光平滑插值微闪
 6. 还原 gki_defconfig 中 KABI task_struct 结构体配置
 """
@@ -33,9 +33,6 @@ def fix_dpu_encoder_phys_cmd(kernel_root):
             content = f.read()
 
         if "INTR_IDX_CTL_START" in content and "_dpu_encoder_phys_cmd_wait_for_ctl_start" in content:
-            # 还原为 2025-06 (6.1.138) 的安全时序逻辑：
-            # 无论是否有单独的 INTR_IDX_CTL_START，只要未 started 均等待 ctl_start，避免命令模式双 DSI 帧撕裂
-            # 严格锚定到 _dpu_encoder_phys_cmd_wait_for_ctl_start 内部，杜绝跨函数匹配风险
             pattern = re.compile(
                 r'if\s*\(\s*phys_enc->irq\[INTR_IDX_CTL_START\]\s*&&[\s\S]*?'
                 r'return\s+_dpu_encoder_phys_cmd_wait_for_ctl_start\(phys_enc\);\s*'
@@ -116,15 +113,16 @@ def fix_drm_fourcc(kernel_root):
         if changed:
             with open(target, "w", encoding="utf-8") as f:
                 f.write(content)
-            log("[OK] 已还原 drm_fourcc 尺寸向下取整计算 (避免 DPU SSPP 偶数硬件对齐越界)")
+            log("[OK] 已还原 DRM 图层尺寸对齐计算 (消除非整数图层采样抖动)")
         else:
-            log("[INFO] drm_fourcc 已经是基准对齐计算")
+            log("[INFO] drm_fourcc.h 尺寸计算已对齐或无需修改")
     except Exception as e:
         log(f"[WARN] 修复 drm_fourcc 时发生异常: {e}")
 
 def fix_pm_domain_vendor_hooks(kernel_root):
     pm_domain_h = os.path.join(kernel_root, "include/trace/hooks/pm_domain.h")
     vendor_hooks_c = os.path.join(kernel_root, "drivers/android/vendor_hooks.c")
+    domain_governor_c = os.path.join(kernel_root, "drivers/base/power/domain_governor.c")
 
     try:
         # 1. 如果缺失 include/trace/hooks/pm_domain.h，重新创建它
@@ -179,9 +177,39 @@ DECLARE_HOOK(android_vh_allow_domain_state,
             if modified:
                 with open(vendor_hooks_c, "w", encoding="utf-8") as f:
                     f.write(vh_content)
-                log("[OK] 已在 vendor_hooks.c 重新导出 android_vh_allow_domain_state (防止显示供电域掉压)")
+                log("[OK] 已在 vendor_hooks.c 重新导出 android_vh_allow_domain_state")
             else:
                 log("[INFO] vendor_hooks.c 中已包含 android_vh_allow_domain_state 导出")
+
+        # 3. 在 drivers/base/power/domain_governor.c 恢复真实调用点
+        if os.path.isfile(domain_governor_c):
+            with open(domain_governor_c, "r", encoding="utf-8", errors="replace") as f:
+                dg_content = f.read()
+
+            if "trace_android_vh_allow_domain_state" not in dg_content:
+                # 注入头文件
+                if "#include <trace/hooks/pm_domain.h>" not in dg_content:
+                    dg_content = "#include <trace/hooks/pm_domain.h>\n" + dg_content
+
+                # 在 __default_power_down_ok 开头注入调用点
+                target_anchor = "bool allow = true;"
+                if target_anchor in dg_content:
+                    # 避免重复
+                    pass
+                else:
+                    pattern_fn = re.compile(r'(static\s+bool\s+__default_power_down_ok\s*\([^)]*\)\s*\{)')
+                    match = pattern_fn.search(dg_content)
+                    if match:
+                        inject_code = (
+                            "\n\tbool allow = true;\n"
+                            "\ttrace_android_vh_allow_domain_state(genpd, state, &allow);\n"
+                            "\tif (!allow)\n\t\treturn false;\n"
+                        )
+                        pos = match.end()
+                        dg_content = dg_content[:pos] + inject_code + dg_content[pos:]
+                        with open(domain_governor_c, "w", encoding="utf-8") as f:
+                            f.write(dg_content)
+                        log("[OK] 已在 domain_governor.c 恢复 trace_android_vh_allow_domain_state 真实调用点")
     except Exception as e:
         log(f"[WARN] 补齐 PM Domain Vendor Hooks 时发生异常: {e}")
 
@@ -195,7 +223,6 @@ def fix_cpu_idle_tick(kernel_root):
             content = f.read()
 
         changed = False
-        # 1. 优先接管 6.1.176 上游新增的 static 辅助函数体，彻底杜绝 -Wunused-function 错误
         pattern_func = re.compile(
             r'(static\s+void\s+idle_call_stop_or_retain_tick\s*\(\s*bool\s+stop_tick\s*\)\s*\{)[\s\S]*?(\n\})',
             re.MULTILINE
@@ -213,7 +240,6 @@ def fix_cpu_idle_tick(kernel_root):
                 changed = True
                 log("[OK] 已成功接管 idle_call_stop_or_retain_tick 函数体 (0 告警规避 -Wunused-function)")
         elif "idle_call_stop_or_retain_tick(stop_tick);" in content:
-            # 兼容没有该 static 函数但有调用点的特殊基线
             content = content.replace(
                 "idle_call_stop_or_retain_tick(stop_tick);",
                 "/* 补丁群4 */ tick_nohz_idle_stop_tick();"
@@ -233,6 +259,7 @@ def fix_cpu_idle_tick(kernel_root):
 def fix_cpufreq_vendor_hooks(kernel_root):
     cpufreq_h = os.path.join(kernel_root, "include/trace/hooks/cpufreq.h")
     vendor_hooks_c = os.path.join(kernel_root, "drivers/android/vendor_hooks.c")
+    freq_table_c = os.path.join(kernel_root, "drivers/cpufreq/freq_table.c")
 
     try:
         # 1. 如果缺失 include/trace/hooks/cpufreq.h，自动创建它
@@ -252,8 +279,7 @@ def fix_cpufreq_vendor_hooks(kernel_root):
 
 struct cpufreq_policy;
 DECLARE_HOOK(android_vh_freq_table_limits,
-	TP_PROTO(struct cpufreq_policy *policy, unsigned int min_freq,
-		 unsigned int max_freq),
+	TP_PROTO(struct cpufreq_policy *policy, unsigned int min_freq, unsigned int max_freq),
 	TP_ARGS(policy, min_freq, max_freq));
 
 #endif /* _TRACE_HOOK_CPUFREQ_H */
@@ -264,28 +290,13 @@ DECLARE_HOOK(android_vh_freq_table_limits,
                 f.write(cpufreq_content)
             log("[OK] 已补齐缺失的 include/trace/hooks/cpufreq.h")
         else:
-            with open(cpufreq_h, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-
-            if "android_vh_freq_table_limits" not in content:
-                hook_decl = """
-struct cpufreq_policy;
-DECLARE_HOOK(android_vh_freq_table_limits,
-	TP_PROTO(struct cpufreq_policy *policy, unsigned int min_freq,
-		 unsigned int max_freq),
-	TP_ARGS(policy, min_freq, max_freq));
-"""
-                content = content.replace("#endif /* _TRACE_HOOK_CPUFREQ_H */", hook_decl + "\n#endif /* _TRACE_HOOK_CPUFREQ_H */")
-                with open(cpufreq_h, "w", encoding="utf-8") as f:
-                    f.write(content)
-                log("[OK] 已在 cpufreq.h 恢复 android_vh_freq_table_limits 声明")
-            else:
-                log("[INFO] cpufreq.h 已包含 android_vh_freq_table_limits")
+            log("[INFO] include/trace/hooks/cpufreq.h 已存在")
 
         # 2. 在 drivers/android/vendor_hooks.c 导出 android_vh_freq_table_limits
         if os.path.isfile(vendor_hooks_c):
             with open(vendor_hooks_c, "r", encoding="utf-8", errors="replace") as f:
                 vh_c = f.read()
+
             modified = False
             if "android_vh_freq_table_limits" not in vh_c:
                 if "#include <trace/hooks/cpufreq.h>" not in vh_c:
@@ -302,9 +313,28 @@ DECLARE_HOOK(android_vh_freq_table_limits,
             if modified:
                 with open(vendor_hooks_c, "w", encoding="utf-8") as f:
                     f.write(vh_c)
-                log("[OK] 已在 vendor_hooks.c 重新导出 android_vh_freq_table_limits (保证总线调度器正常调频)")
+                log("[OK] 已在 vendor_hooks.c 重新导出 android_vh_freq_table_limits")
             else:
                 log("[INFO] vendor_hooks.c 中已包含 android_vh_freq_table_limits 导出")
+
+        # 3. 在 drivers/cpufreq/freq_table.c 恢复真实调用点
+        if os.path.isfile(freq_table_c):
+            with open(freq_table_c, "r", encoding="utf-8", errors="replace") as f:
+                ft_content = f.read()
+
+            if "trace_android_vh_freq_table_limits" not in ft_content:
+                if "#include <trace/hooks/cpufreq.h>" not in ft_content:
+                    ft_content = "#include <trace/hooks/cpufreq.h>\n" + ft_content
+
+                anchor_target = "policy->min = policy->cpuinfo.min_freq = min_freq;"
+                if anchor_target in ft_content:
+                    ft_content = ft_content.replace(
+                        anchor_target,
+                        "\ttrace_android_vh_freq_table_limits(policy, min_freq, max_freq);\n\t" + anchor_target
+                    )
+                    with open(freq_table_c, "w", encoding="utf-8") as f:
+                        f.write(ft_content)
+                    log("[OK] 已在 freq_table.c 恢复 trace_android_vh_freq_table_limits 真实调用点")
     except Exception as e:
         log(f"[WARN] 恢复 cpufreq 钩子时发生异常: {e}")
 
@@ -329,24 +359,26 @@ def fix_gki_defconfig(kernel_root):
 
 def main():
     kernel_root = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-    target_choice = sys.argv[2] if len(sys.argv) > 2 else "无"
+    raw_enabled = sys.argv[2] if len(sys.argv) > 2 else "false"
     kernel_version = sys.argv[3] if len(sys.argv) > 3 else ""
     sub_level = sys.argv[4] if len(sys.argv) > 4 else ""
     os_patch_level = sys.argv[5] if len(sys.argv) > 5 else ""
 
+    is_enabled = str(raw_enabled).strip().lower() in ("true", "1", "yes", "on", "6.1.176")
+
     log("=================================================================")
-    log("检查小米 14 Pro 全系统驱动补全与屏幕闪烁修复配置...")
-    log(f"用户下拉选择: '{target_choice}'")
-    log(f"当前内核参数: 版本={kernel_version}, 子版本号={sub_level}, 补丁级别={os_patch_level}")
+    log("检查小米 14 Pro 驱动补全与屏幕闪烁修复配置 (写死限定 6.1.176)...")
+    log(f"用户勾选状态: {is_enabled}")
+    log(f"当前构建参数: 版本={kernel_version}, 子版本号={sub_level}, 补丁级别={os_patch_level}")
     log(f"源码目标路径: {kernel_root}")
     log("=================================================================")
 
-    # 1. 检查用户选择
-    if target_choice == "无" or not target_choice.strip():
-        log("[INFO] 用户选择了 '无'，跳过小米14Pro驱动补全与屏幕闪烁修复。")
+    # 1. 检查是否勾选
+    if not is_enabled:
+        log("[INFO] 用户未启用小米14Pro驱动补全与屏幕闪烁修复，跳过。")
         sys.exit(0)
 
-    # 2. 解析内核真实版本与子版本号
+    # 2. 从源码 Makefile 解析内核真实大版本与子版本号
     actual_sublevel = sub_level
     actual_major = ""
     actual_minor = ""
@@ -369,30 +401,13 @@ def main():
     if actual_major and actual_minor:
         major_minor = f"{actual_major}.{actual_minor}"
 
-    sublevel_int = -1
-    if actual_sublevel:
-        try:
-            sublevel_int = int(actual_sublevel)
-        except Exception:
-            pass
+    # 3. 严格写死版本限定：必须为 6.1.176，其他任何版本均干净跳过
+    target_version_str = f"{major_minor}.{actual_sublevel}"
+    if major_minor != "6.1" or str(actual_sublevel) != "176":
+        log(f"[INFO] 当前内核版本为 {target_version_str}，不符合写死的目标版本 6.1.176，安全跳过补丁。")
+        sys.exit(0)
 
-    # 3. 版本兼容性与适用性判断 (数值对比 >= 140)
-    # 小米 14 Pro vendor 闭源驱动基于 6.1.138 编译，在 6.1.140 及以上由于 Google DPU 重构发生脱节
-    if major_minor == "6.1":
-        if sublevel_int != -1 and sublevel_int < 140:
-            log(f"[INFO] 当前内核版本为 6.1.{actual_sublevel} (< 6.1.140)，原始 vendor 驱动原生兼容，无需修复，安全跳过。")
-            sys.exit(0)
-        elif sublevel_int >= 140:
-            log(f"[INFO] 目标版本匹配成功 (Linux 6.1.{actual_sublevel} >= 6.1.140)，开始应用完整修复...")
-        elif "6.1.176" in target_choice or os_patch_level == "2026-09":
-            log(f"[INFO] 根据补丁级别/配置参数识别为 6.1 高版本 ({os_patch_level})，开始应用完整修复...")
-        else:
-            log(f"[INFO] 用户明确指定启用修复 ('{target_choice}')，开始应用完整修复...")
-    else:
-        # 非 6.1 内核
-        if "6.1" in target_choice or target_choice != "无":
-            log(f"[WARN] 当前内核版本为 {major_minor}.{actual_sublevel}，本修复仅适用于 6.1.140+ 内核，安全跳过。")
-            sys.exit(0)
+    log(f"[OK] 目标版本严格匹配 (Linux 6.1.176)，开始应用完整修复...")
 
     # 4. 执行全系统级 5 大关键补丁群修复
     fix_dpu_encoder_phys_cmd(kernel_root)
@@ -403,7 +418,7 @@ def main():
     fix_cpu_idle_tick(kernel_root)
     fix_gki_defconfig(kernel_root)
 
-    log("[DONE] 小米 14 Pro 全系统驱动补全与屏幕闪烁修复组全部处理完成！")
+    log("[DONE] 小米 14 Pro (6.1.176) 驱动补全与屏幕闪烁修复全部处理完成！")
 
 if __name__ == "__main__":
     main()

@@ -67,15 +67,6 @@ on:
           - "仅上传 AnyKernel3.zip"
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
-      fix_mi14p_flicker:
-        description: "补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁(>=6.1.140)"
-        required: false
-        type: choice
-        options:
-          - "无"
-          - "自动(>=6.1.140)"
-          - "6.1.176"
-        default: "无"
 
       # ==================== 文本输入 ====================
       os_patch_level:
@@ -141,6 +132,11 @@ on:
         default: false
       droidspaces_ntsync:
         description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
+        required: false
+        type: boolean
+        default: false
+      fix_mi14p_flicker:
+        description: "补全小米14Pro驱动及修复屏幕闪烁(写死限定6.1.176)"
         required: false
         type: boolean
         default: false
@@ -247,7 +243,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
-      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
+      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || false }}
       enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
       patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
 

@@ -27,7 +27,8 @@
 - [🌐 【独家】网络增强与 FQ (Fair Queueing) 队列调度器固化](#-独家网络增强与-fq-fair-queueing-队列调度器固化)
 - [🛠️ 【独家】5.10 内核 Thin LTO 内存保护与编译修复](#️-独家510-内核-thin-lto-内存保护与编译修复)
 - [🛡️ GhostLock 安全漏洞修补 (CVE-2026-43499 / 53163)](#️-ghostlock-安全漏洞修补-cve-2026-43499--53163)
-- [🛑 BBG 底层防格机保护 (hmbird_patch)](#-bbg-底层防格机保护-hmbird_patch)
+- [🛑 BBG 底层基带与系统防格机保护 (Baseband-guard)](#-bbg-底层基带与系统防格机保护-baseband-guard)
+- [🧩 一加 8E 处理器支持驱动 (hmbird_patch)](#-一加-8e-处理器支持驱动-hmbird_patch)
 - [📦 NoMount 内核级免挂载元模块](#-nomount-内核级免挂载元模块)
 - [🧪 伪装 `/proc/config.gz`（Stock Config 替换）](#-伪装-procconfiggzstock-config-替换)
 - [🧪 Droidspaces 容器支持（实验性）](#-droidspaces-容器支持实验性)
@@ -94,21 +95,15 @@ mmd --client ping      # 健康心跳检测
 驱动修复脚本位于 [`scripts/fix_xiaomi_shennong_display.py`](../scripts/fix_xiaomi_shennong_display.py)。
 
 ### 1. 故障根因分析
-小米 14 Pro（`shennong`）搭载高通骁龙 8 Gen 3（SM8650）处理器。原厂澎湃 OS 的闭源 Display Vendor 模块基于内核 `6.1.138` 编译。当使用通用构建流水线将内核升级至 `6.1.140+`（如 `6.1.176`）时，Google ACK 对 DRM/DPU 架构进行了多项时序变动与 Vendor Hooks 移除，导致设备出现**高频屏幕微闪、背光插值撕裂、双 DSI 命令模式丢帧甚至开机黑屏**。
+小米 14 Pro（`shennong`）搭载高通骁龙 8 Gen 3（SM8650）处理器。原厂澎湃 OS 的闭源 Display Vendor 模块基于内核 `6.1.138` 编译。当使用通用构建流水线将内核升级至高版本（如 `6.1.176`）时，Google ACK 对 DRM/DPU 架构进行了多项时序变动并移除了关键 Vendor Hooks，导致设备出现**高频屏幕微闪、背光插值撕裂、双 DSI 命令模式丢帧甚至开机黑屏**。
 
-### 2. 独家六大修复维度
-1. **DPU 物理编码器提交等待时序修复**（`dpu_encoder_phys_cmd.c`）：
-   还原为安全的等待逻辑：只要硬件控制器未 `is_started`，强制等待 `ctl_start` 信号完成，彻底消除双 DSI 命令模式下的帧撕裂闪烁；
-2. **放宽 DRM Atomic Modeset 克隆检查**（`drm_atomic_helper.c`）：
-   将 `drm_atomic_check_valid_clones` 失败时的 `-EINVAL` 返回放宽为安全放行，防止 vendor 驱动在图层 Modeset 时发生连锁丢帧；
-3. **还原 DRM 图层尺寸对齐计算**（`include/drm/drm_fourcc.h`）：
-   还原 `width / info->hsub` 舍入逻辑，防止非整数倍图层渲染出现单像素抖动；
-4. **恢复 Google 删除的供电域与总线调度 Vendor Hooks**：
-   重构恢复 `pm_domain` 与 `cpufreq` 供电回调，确保显示子系统供电处于正常工作状态；
-5. **CPU Idle 定时器唤醒防护**：
-   接管 CPU 睡眠防抖，防止 CPU 进入过深 C-State 导致 VSYNC 中断延迟拉长引发背光微闪；
-6. **KABI 结构体还原**：
-   保持 `task_struct` 与原厂驱动一致，杜绝内存偏移崩溃。
+### 2. 独家六大修复维度与实现在线机制
+- **版本写死限定（6.1.176）**：工作流提供布尔开关 `fix_mi14p_flicker`（默认关闭）。为确保系统绝对稳定与可预测，**版本写死限定为严格匹配 6.1.176**，不再使用下拉菜单与自动模糊猜测。若当前编译内核不是 6.1.176，脚本自动安全跳过并打印说明；
+- **补全 Vendor Hook 真实调用点**：不仅在头文件中还原声明，更在 `domain_governor.c` 中真实植入 `trace_android_vh_allow_domain_state` 调用，在 `freq_table.c` 中真实植入 `trace_android_vh_freq_table_limits` 调用，让高通 Display 闭源驱动的回调能被真实触发；
+- **DPU 物理编码器提交等待时序修复**（`dpu_encoder_phys_cmd.c`）：还原为安全的等待逻辑：只要硬件控制器未 `is_started`，强制等待 `ctl_start` 信号完成，彻底消除双 DSI 命令模式下的帧撕裂闪烁；
+- **放宽 DRM Atomic Modeset 克隆检查**（`drm_atomic_helper.c`）：将 `drm_atomic_check_valid_clones` 失败时的 `-EINVAL` 返回放宽为安全放行，防止 vendor 驱动在图层 Modeset 时发生连锁丢帧；
+- **还原 DRM 图层尺寸对齐计算**（`include/drm/drm_fourcc.h`）：还原 `width / info->hsub` 舍入逻辑，防止非整数倍图层渲染出现单像素抖动；
+- **CPU Idle 定时器唤醒防护与 KABI 结构对齐**：接管 CPU 睡眠防抖，防止 CPU 进入过深 C-State 导致 VSYNC 中断延迟拉长引发背光微闪，并保持 `task_struct` 结构体布局严格对齐。
 
 ---
 
@@ -143,11 +138,17 @@ GhostLock 漏洞涵盖 `CVE-2026-43499` 与 `CVE-2026-53163`。攻击者只需�
 
 ---
 
-## 🛑 BBG 底层防格机保护 (hmbird_patch)
+## 🛑 BBG 底层基带与系统防格机保护 (Baseband-guard)
 
 部分流氓模块或勒索病毒在获取 Root 后会调用底层命令清空底层关键分区。
-- **工作原理**：在内核块设备调度层注入 `hmbird_patch.c`，将 `boot`、`super`、`userdata`、`metadata`、`persist` 和基带分区列入写保护白名单，非授权写入直接由内核硬拒绝。
+- **工作原理**：集成开源项目 [vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)，在 Linux 安全模块（LSM）层建立白名单安全防线。当有恶意 root 脚本或流氓模块企图通过 `dd`、`blkdiscard`、`format` 或原始 I/O 擦写抹除 `boot`、`super`、`userdata`、`metadata`、`persist`、基带及 EFS 分区时，内核安全子系统直接进行拦截并拒绝执行，杜绝手机彻底变砖格机的风险。
 - **默认状态**：本仓库已设为**默认开启**（`default: true`）。
+
+---
+
+## 🧩 一加 8E 处理器支持驱动 (hmbird_patch)
+
+- **工作原理**：通过工作流选项 `supp_op`（默认关闭），向内核源码树注入 `hmbird_patch.c` 并加入构建，提供特定 SoC / 一加 8E 处理器的驱动与符号支持。
 
 ---
 

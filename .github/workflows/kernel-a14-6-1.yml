@@ -123,6 +123,11 @@ on:
         required: false
         type: boolean
         default: false
+      fix_mi14p_flicker:
+        description: "补全小米14Pro驱动及修复屏幕闪烁(写死限定6.1.176)"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       kernelsu_variant:
@@ -186,8 +191,8 @@ on:
         default: false
       fix_mi14p_flicker:
         required: false
-        type: string
-        default: "无"
+        type: boolean
+        default: false
       called_from_main:
         description: "是否从 main.yml 调用（内部使用）"
         required: false
@@ -281,7 +286,7 @@ jobs:
       ksu_mode: ${{ inputs.ksu_mode || '关闭' }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
-      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
+      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过

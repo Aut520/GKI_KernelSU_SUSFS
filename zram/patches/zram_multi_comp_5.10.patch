@@ -410,9 +410,8 @@ index 3bfd318..2a5dffd 100644
  		pr_err("Compression failed! err=%d\n", ret);
  		zs_free(zram->mem_pool, handle);
  		return ret;
-@@ -1394,7 +1554,7 @@ compress_again:
- 				__GFP_MOVABLE |
- 				__GFP_CMA);
+@@ -1394,6 +1554,6 @@ compress_again:
+ 				__GFP_MOVABLE);
  	if (!handle) {
 -		zcomp_stream_put(zram->comp);
 +		zcomp_stream_put(zram->comps[ZRAM_PRIMARY_COMP]);
@@ -756,10 +755,7 @@ index 3bfd318..2a5dffd 100644
  	memset(&zram->stats, 0, sizeof(zram->stats));
 -	zcomp_destroy(comp);
 +	zram_destroy_comps(zram);
-+	if (zcomp_available_algorithm("lz4"))
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
-+	else
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -841,10 +837,7 @@ index 3bfd318..2a5dffd 100644
  	device_add_disk(NULL, zram->disk, zram_disk_attr_groups);
  
 -	strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));
-+	if (zcomp_available_algorithm("lz4"))
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
-+	else
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -859,7 +852,7 @@ diff --git a/drivers/block/zram/zram_drv.h b/drivers/block/zram/zram_drv.h
 +++ b/drivers/block/zram/zram_drv.h
 @@ -40,5 +40,8 @@
   */
- #define ZRAM_FLAG_SHIFT (PAGE_SHIFT + 1)
+ #define ZRAM_FLAG_SHIFT 24
  
 +/* Only 2 bits are allowed for comp priority index */
 +#define ZRAM_COMP_PRIORITY_MASK	0x3UL

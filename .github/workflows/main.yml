@@ -152,6 +152,10 @@ on:
         description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
         type: boolean
         default: false
+      fix_mi14p_flicker:
+        description: "补全小米14Pro驱动及修复屏幕闪烁(写死限定6.1.176)"
+        type: boolean
+        default: false
 
 jobs:
   # 下载最新的 KernelSU 管理器 APK 和 SUSFS 模块
@@ -229,7 +233,7 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       artifact_upload_mode: "上传全部"
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
-      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || '无' }}
+      fix_mi14p_flicker: ${{ inputs.fix_mi14p_flicker || false }}
       enable_multi_comp: ${{ inputs.enable_multi_comp || false }}
       patch_multi_comp: ${{ inputs.patch_multi_comp || false }}
       called_from_main: true
@@ -401,7 +405,7 @@ jobs:
   # 汇总各构建任务导出的 SUSFS 集成补丁，打成一个 zip 供 Release 分发
   # 仅 SukiSU / BakaSU 且启用 SUSFS 时有产物
   collect-susfs-patches:
-    if: ${{ !cancelled() && inputs.export_susfs_patches && inputs.ksu_mode == '关闭' && (inputs.kernelsu_variant == 'SukiSU' || inputs.kernelsu_variant == 'BakaSU') }}
+    if: ${{ !cancelled() && inputs.export_susfs_patches && inputs.ksu_mode == '关闭' && (inputs.kernelsu_variant == 'SukiSU' || inputs.kernelsu_variant == 'SukiSU(40726)' || inputs.kernelsu_variant == 'SukiSU(40548)' || inputs.kernelsu_variant == 'BakaSU') }}
     runs-on: ubuntu-24.04
     needs:
       - build-a12-5-10
@@ -589,8 +593,8 @@ jobs:
           case "${{ inputs.kernelsu_variant }}" in
             "Next")      KSU_NAME="KernelSU-Next" ;;
             "Official")  KSU_NAME="KernelSU" ;;
-            "SukiSU")    KSU_NAME="SukiSU" ;;
-            "BakaSU")  KSU_NAME="BakaSU" ;;
+            "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") KSU_NAME="SukiSU" ;;
+            "BakaSU")    KSU_NAME="BakaSU" ;;
           esac
           echo "KSU_NAME=$KSU_NAME" >> $GITHUB_ENV
 
@@ -613,11 +617,12 @@ jobs:
           fi
 
           # Hook 类型
-          if [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] || [ "${{ inputs.kernelsu_variant }}" = "BakaSU" ]; then
-            echo "HOOK_TYPE=SUSFS Inline Hooks" >> $GITHUB_ENV
-          else
-            echo "HOOK_TYPE=KPROBE Hooks" >> $GITHUB_ENV
-          fi
+          case "${{ inputs.kernelsu_variant }}" in
+            SukiSU*|"BakaSU")
+              echo "HOOK_TYPE=SUSFS Inline Hooks" >> $GITHUB_ENV ;;
+            *)
+              echo "HOOK_TYPE=KPROBE Hooks" >> $GITHUB_ENV ;;
+          esac
 
           # Mount 类型
           if [ "${{ inputs.kernelsu_variant }}" = "Official" ]; then
@@ -677,7 +682,7 @@ jobs:
         run: |
           case "${{ inputs.kernelsu_variant }}" in
             "Official") BRANCH="main" ;;
-            "SukiSU")
+            "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)")
               if [ "${{ inputs.ksu_mode }}" != "关闭" ]; then
                 BRANCH="main"
               else
@@ -697,19 +702,23 @@ jobs:
           case "${{ inputs.kernelsu_variant }}" in
             "Official") REPO_URL="https://github.com/tiann/KernelSU.git"; REPO_URL2="tiann/KernelSU" ;;
             "Next") REPO_URL="https://github.com/KernelSU-Next/KernelSU-Next.git"; REPO_URL2="KernelSU-Next/KernelSU-Next" ;;
-            "SukiSU") REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"; REPO_URL2="SukiSU-Ultra/SukiSU-Ultra" ;;
+            "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"; REPO_URL2="SukiSU-Ultra/SukiSU-Ultra" ;;
             "BakaSU") REPO_URL="https://github.com/Baka-SU/BakaSU.git"; REPO_URL2="Baka-SU/BakaSU" ;;
           esac
 
-          if [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] && [ -f "config/config" ]; then
-            CUSTOM_ENABLED=$(grep "^custom=" config/config | cut -d'=' -f2)
-            CUSTOM_COMMIT=$(grep "^sukisu=" config/config | cut -d'=' -f2)
-            if [ "$CUSTOM_ENABLED" = "true" ] && [ -n "$CUSTOM_COMMIT" ]; then
-              KSU_REF="$CUSTOM_COMMIT"
-              KSU_URL="https://github.com/$REPO_URL2/commit/$CUSTOM_COMMIT"
-              echo "BRANCH_INFO=custom" >> $GITHUB_ENV
-            fi
-          fi
+          case "${{ inputs.kernelsu_variant }}" in
+            SukiSU*)
+              if [ -f "config/config" ]; then
+                CUSTOM_ENABLED=$(grep "^custom=" config/config | cut -d'=' -f2)
+                CUSTOM_COMMIT=$(grep "^sukisu=" config/config | cut -d'=' -f2)
+                if [ "$CUSTOM_ENABLED" = "true" ] && [ -n "$CUSTOM_COMMIT" ]; then
+                  KSU_REF="$CUSTOM_COMMIT"
+                  KSU_URL="https://github.com/$REPO_URL2/commit/$CUSTOM_COMMIT"
+                  echo "BRANCH_INFO=custom" >> $GITHUB_ENV
+                fi
+              fi
+              ;;
+          esac
 
           if [ -z "${KSU_REF:-}" ]; then
             COMMIT_HASH=$(git ls-remote $REPO_URL refs/heads/${KSU_BRANCH:-main} | awk '{ print $1 }')
@@ -815,7 +824,7 @@ jobs:
           | SUSFS | $SUS_VER |
           | Hook 类型 | $HOOK_TYPE |
           | 挂载方式 | $MOUNT_TYPE |
-          | LTO | thin |
+          | LTO | 5.10: thin / 5.15+: none (对齐官方 GKI) |
           | BBG 安全补丁 | $BBG_STATUS |
           | ZRAM / LZ4KD | $LZ4_STATUS |
           | 网络增强 (BBRv3 / IPSet / CAKE / CIFS) | $NET_STATUS |

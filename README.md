@@ -36,7 +36,8 @@
   - [SukiX-Team/SukiSU](https://github.com/SukiX-Team/SukiSU) 与 [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)
   - BakaSU 变体
 - **NoMount 挂载元模块**：[maxsteeel/nomount](https://github.com/maxsteeel/nomount)
-- **底层防变砖机制 (BBG)**：`hmbird_patch.c` 关键块设备分区写拦截
+- **基带与系统防格机保护 (BBG)**：[vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)（LSM 模块级底层写保护拦截，阻止恶意抹除基带与关键分区）
+- **一加 8E 处理器支持驱动**：`hmbird_patch.c`（针对特定 SoC 的驱动与符号支持）
 - **内核卡刷包引擎**：[osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3)
 - **容器环境与驱动**：[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)
 - **Linux 上游安全补丁**：GhostLock 漏洞研究团队及 Linux 官方 rtmutex 修复链
@@ -113,7 +114,7 @@ flowchart TD
         P4 --> P5["注入 NoMount 挂载元模块 (内核 fs/ 层路径重定向)"]
         P5 --> P6["注入 Droidspaces 容器支持 (SYSVIPC / POSIX_MQUEUE kABI 补丁) 及 NTSync"]
         P6 --> P7["配置 ZRAM 基础算法与运行 manage_zram_multi_comp (专属 patch + Python 语义双引擎)"]
-        P7 --> P8["注入 BBG 防格机保护 (hmbird_patch.c)"]
+        P7 --> P8["注入 BBG 防格机保护 (Baseband-guard LSM 安全模块)"]
         P8 --> P9["应用网络增强 (BBRv3 + 默认固化 FQ 调度器 + IPSet + CAKE + CIFS)"]
         P9 --> P10["应用 Re-Kernel 驱动 (in-tree 模块集成)"]
     end
@@ -155,8 +156,9 @@ flowchart TD
 | **SuSFS 隐蔽系统** | **默认开启** | 深度隐藏 Root 与自定义挂载 | 全版本；VFS 核心路径拦截、重载 `openat` / `stat` 伪装敏感目录。 |
 | **ZRAM Multi-Comp** | **默认开启** | 多流并发二次重压缩，大幅提升后台留存 | **重点验证于 6.1 / 5.10**；ZSTD+LZ4 双流并发，消除锁竞争。 |
 | **独立 Rust MMD** | **配套工具** | 独立于系统框架的原生内存守护进程 | **全 Android 版本通用**；体积 400KB，内存 <1.5MB，纯 Native 常驻。 |
-| **小米14Pro屏闪修复** | 可选开关 | 修复 6.1.140+ 内核屏幕微闪与丢帧 | **针对 6.1 内核 / SM8650**；重构 DPU 时序等待、放宽 Modeset 克隆。 |
-| **BBG 防格机机制** | **默认开启** | 拦截恶意模块破坏清空底层关键分区 | 全版本；注入 `hmbird_patch.c`，在块设备驱动层做写保护白名单。 |
+| **小米14Pro屏闪修复** | 可选开关 | 修复 6.1.176 内核屏幕微闪与丢帧 | **写死限定针对 6.1.176 内核**；重构 DPU 时序等待、放宽 Modeset 克隆并补全 Vendor Hook 真实调用点（非 6.1.176 自动安全跳过）。 |
+| **BBG 防格机机制** | **默认开启** | 拦截恶意模块破坏清空底层基带与关键分区 | 全版本；集成 Baseband-guard LSM 安全模块，从内核安全子系统拦截非法格式化与擦写。 |
+| **一加8E处理器驱动** | 可选开关 | 提供一加 8E / 特殊 SoC 驱动与符号支持 | 注入 `hmbird_patch.c` 并加入构建。 |
 | **NoMount 元模块** | **默认开启** | 无需创建用户态挂载点即可加载模块 | 全版本；内核 `fs/` 层 inode 重定向，绕过 mount 表检测。 |
 | **网络增强 (FQ+BBRv3)** | **默认开启** | 提升弱网吞吐、降低延迟，抑制缓冲膨胀 | 全版本（5.10 额外打补丁）；固化 FQ 调度器，集成 IPSet/CAKE。 |
 | **GhostLock 安全修复** | **默认开启** | 修补 CVE-2026-43499/53163 提权漏洞 | 全版本；修复 `kernel/locking/rtmutex.c` 优先级继承死锁与竞争。 |

@@ -416,9 +416,8 @@ index fb99592..f05ae8b 100644
  		pr_err("Compression failed! err=%d\n", ret);
  		zs_free(zram->mem_pool, handle);
  		return ret;
-@@ -1409,7 +1569,7 @@ compress_again:
- 				__GFP_MOVABLE |
- 				__GFP_CMA);
+@@ -1409,6 +1569,6 @@ compress_again:
+ 				__GFP_MOVABLE);
  	if (IS_ERR((void *)handle)) {
 -		zcomp_stream_put(zram->comp);
 +		zcomp_stream_put(zram->comps[ZRAM_PRIMARY_COMP]);
@@ -761,10 +760,7 @@ index fb99592..f05ae8b 100644
 -		zcomp_destroy(zram->comp);
 -	zram->comp = NULL;
 +	zram_destroy_comps(zram);
-+	if (zcomp_available_algorithm("lz4"))
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
-+	else
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -845,10 +841,7 @@ index fb99592..f05ae8b 100644
  		goto out_cleanup_disk;
  
 -	strscpy(zram->compressor, default_compressor, sizeof(zram->compressor));
-+	if (zcomp_available_algorithm("lz4"))
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
-+	else
-+		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");

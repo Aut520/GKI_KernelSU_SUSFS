@@ -98,8 +98,8 @@ on:
         default: false
       fix_mi14p_flicker:
         required: false
-        type: string
-        default: "无"
+        type: boolean
+        default: false
       enable_multi_comp:
         required: false
         type: boolean
@@ -582,12 +582,12 @@ jobs:
           if [ -f "$GITHUB_WORKSPACE/hmbird_patch.c" ]; then
             cp "$GITHUB_WORKSPACE/hmbird_patch.c" ./hmbird_patch.c
           else
-            curl -LSs "https://github.com/${{ github.repository }}/raw/refs/heads/dev/hmbird_patch.c" -o hmbird_patch.c
+            curl -LSs "https://github.com/${{ github.repository }}/raw/refs/heads/main/hmbird_patch.c" -o hmbird_patch.c
           fi
           echo "obj-y += hmbird_patch.o" >> Makefile
 
-      - name: 补全小米14Pro的驱动以及修复高内核版本的屏幕闪烁
-        if: inputs.fix_mi14p_flicker != '无' && inputs.fix_mi14p_flicker != ''
+      - name: 补全小米14Pro驱动及修复屏幕闪烁(写死限定6.1.176)
+        if: inputs.fix_mi14p_flicker
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           bash "$GITHUB_WORKSPACE/scripts/fix_xiaomi_shennong_display.sh" \
@@ -856,6 +856,22 @@ jobs:
           OS_PATCH_LEVEL: ${{ inputs.os_patch_level }}
           SUB_LEVEL: ${{ inputs.sub_level }}
         run: bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
+
+      - name: 应用 Unicode 绕过修复
+        if: inputs.enable_susfs
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          # 上游 2023-11、2024-01、2024-03 月度分支已带有 "unicode: Don't special case ignorable code points"，
+          # patch --forward 会判定为已应用并跳过，但被忽略的 hunk 仍会写成 .rej，先做幂等检查
+          if [ -f fs/unicode/mkutf8data.c ] && ! grep -q 'ignore_init' fs/unicode/mkutf8data.c; then
+            echo "源码已包含 Unicode 绕过修复，跳过补丁"
+            exit 0
+          fi
+          if [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
+            patch -p1 --forward < "$ACTION_BUILD/patches/unicode_bypass_fix_6.1-.patch" || true
+          else
+            patch -p1 --forward < "$ACTION_BUILD/patches/unicode_bypass_fix_6.1+.patch" || true
+          fi
 
       - name: 生成 SUSFS 集成补丁
         if: env.SUSFS_PATCH_EXPORT == 'true'
@@ -1154,22 +1170,6 @@ jobs:
 
           echo "=== NTSync 补丁与配置注入完成 ==="
 
-      - name: 应用 Unicode 绕过修复
-        if: inputs.enable_susfs
-        working-directory: ${{ env.KERNEL_ROOT }}/common
-        run: |
-          # 上游 2023-11、2024-01、2024-03 月度分支已带有 "unicode: Don't special case ignorable code points"，
-          # patch --forward 会判定为已应用并跳过，但被忽略的 hunk 仍会写成 .rej，先做幂等检查
-          if [ -f fs/unicode/mkutf8data.c ] && ! grep -q 'ignore_init' fs/unicode/mkutf8data.c; then
-            echo "源码已包含 Unicode 绕过修复，跳过补丁"
-            exit 0
-          fi
-          if [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
-            patch -p1 --forward < "$ACTION_BUILD/patches/unicode_bypass_fix_6.1-.patch" || true
-          else
-            patch -p1 --forward < "$ACTION_BUILD/patches/unicode_bypass_fix_6.1+.patch" || true
-          fi
-
       - name: 配置 ZRAM LZ4 补丁栈
         if: inputs.use_zram
         working-directory: ${{ env.KERNEL_ROOT }}/common
@@ -1275,7 +1275,7 @@ jobs:
             sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
           fi
 
-          if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ]; then
+          if [ -f "$KERNEL_ROOT/common/modules.bzl" ]; then
             sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$KERNEL_ROOT/common/modules.bzl"
           fi
 
@@ -1291,6 +1291,9 @@ jobs:
             "${{ inputs.enable_multi_comp }}" \
             "${{ inputs.patch_multi_comp }}" \
             "$DEFCONFIG"
+          if [ -f "$KERNEL_ROOT/common/modules.bzl" ]; then
+            sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$KERNEL_ROOT/common/modules.bzl"
+          fi
 
       - name: 添加 BBG 防格机补丁
         if: inputs.use_bbg

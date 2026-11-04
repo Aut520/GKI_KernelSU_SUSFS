@@ -8,6 +8,7 @@ ZRAM Multi-Comp (多压缩流 / 二次重压缩) 全版本兼容管理与修补�
 
 import sys
 import os
+import re
 import subprocess
 
 def log(msg):
@@ -22,18 +23,22 @@ def append_config(config_file):
         log(f"[WARN] 未找到配置文件: {config_file}，无法追加配置项")
         return
 
-    configs_to_add = [
-        "CONFIG_ZRAM_MULTI_COMP=y\n",
-        "CONFIG_ZRAM_MEMORY_TRACKING=y\n",
-        "CONFIG_CRYPTO_LZ4=y\n",
-        "CONFIG_CRYPTO_ZSTD=y\n",
-        "CONFIG_ZRAM_DEF_COMP_LZ4=y\n",
-        'CONFIG_ZRAM_DEF_COMP="lz4"\n'
-    ]
-
     try:
         with open(config_file, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
+
+        configs_to_add = [
+            "CONFIG_ZRAM_MULTI_COMP=y\n",
+            "CONFIG_ZRAM_MEMORY_TRACKING=y\n",
+            "CONFIG_CRYPTO_LZ4=y\n",
+            "CONFIG_CRYPTO_ZSTD=y\n",
+        ]
+        # 仅在未定义默认压缩算法时兜底追加 LZ4，避免架空 lz4kd 等已选算法
+        if "CONFIG_ZRAM_DEF_COMP" not in content:
+            configs_to_add.extend([
+                "CONFIG_ZRAM_DEF_COMP_LZ4=y\n",
+                'CONFIG_ZRAM_DEF_COMP="lz4"\n'
+            ])
 
         new_entries = []
         for cfg in configs_to_add:
@@ -76,6 +81,38 @@ def check_native_support(kernel_root, kernel_version):
         pass
 
     return False
+
+def setup_native_secondary_comp(kernel_root):
+    """
+    为 Linux 6.6+ / 6.12+ 原生 Multi-Comp 驱动在 zram_add / zram_reset_device 中
+    注入次级压缩算法（zstd/lz4hc）初始化，解决 Android 开机 disksize 锁死导致 recomp 为空、mmd 无法重压缩的问题。
+    """
+    zram_c_path = os.path.join(kernel_root, "drivers/block/zram/zram_drv.c")
+    if not os.path.isfile(zram_c_path):
+        return
+    try:
+        with open(zram_c_path, "r", encoding="utf-8", errors="replace") as f:
+            code = f.read()
+
+        if "ZRAM_SECONDARY_COMP" in code:
+            return
+
+        comp_code = """\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+\tif (zcomp_available_algorithm("zstd"))
+\t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
+\telse if (zcomp_available_algorithm("lz4hc"))
+\t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "lz4hc");
+#endif"""
+
+        target = "\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);"
+        if target in code:
+            code = code.replace(target, comp_code)
+            with open(zram_c_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(code)
+            log("[OK] 已为原生 Multi-Comp 内核源码注入次级压缩算法(zstd/lz4hc)默认初始化")
+    except Exception as e:
+        log(f"[WARN] 注入原生次级算法失败: {e}")
 
 def get_patch_file_for_version(script_dir, kernel_version):
     ver = kernel_version.strip()
@@ -444,30 +481,33 @@ static int zram_read_from_zspool(struct zram *zram, struct page *page,
 	return ret;
 }
 """
-            idx_bvec_read = zram_c.find("static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,")
-            if idx_bvec_read != -1:
+            m_bvec = re.search(r"static\s+int\s+__zram_bvec_read\s*\(", zram_c)
+            if m_bvec:
+                idx_bvec_read = m_bvec.start()
                 zram_c = zram_c[:idx_bvec_read] + read_zspool_code + "\n" + zram_c[idx_bvec_read:]
 
             # __zram_bvec_read body replace
-            idx_read_start = zram_c.find("static int __zram_bvec_read(")
-            idx_read_next = zram_c.find("static int zram_bvec_read(", idx_read_start)
-            if idx_read_start != -1 and idx_read_next != -1:
-                read_block = zram_c[idx_read_start:idx_read_next]
-                anchor_handle = "\thandle = zram_get_handle(zram, index);"
-                if anchor_handle in read_block:
-                    idx_bh = read_block.find(anchor_handle)
-                    new_read_block = read_block[:idx_bh] + "\tret = zram_read_from_zspool(zram, page, index);\n\tzram_slot_unlock(zram, index);\n\treturn ret;\n}\n\n"
-                    # 清理重构后在 __zram_bvec_read 中未被使用的局部变量声明，防止 -Werror 报 unused-variable
-                    for unused_decl in [
-                        "\tstruct zcomp_strm *zstrm;\n",
-                        "\tunsigned long handle;\n",
-                        "\tunsigned int size;\n",
-                        "\tvoid *src, *dst;\n",
-                        "\tvoid *src;\n",
-                        "\tvoid *dst;\n",
-                    ]:
-                        new_read_block = new_read_block.replace(unused_decl, "")
-                    zram_c = zram_c[:idx_read_start] + new_read_block + zram_c[idx_read_next:]
+            m_read_start = re.search(r"static\s+int\s+__zram_bvec_read\s*\(", zram_c)
+            if m_read_start:
+                idx_read_start = m_read_start.start()
+                idx_read_next = zram_c.find("static int zram_bvec_read(", idx_read_start)
+                if idx_read_next != -1:
+                    read_block = zram_c[idx_read_start:idx_read_next]
+                    anchor_handle = "\thandle = zram_get_handle(zram, index);"
+                    if anchor_handle in read_block:
+                        idx_bh = read_block.find(anchor_handle)
+                        new_read_block = read_block[:idx_bh] + "\tret = zram_read_from_zspool(zram, page, index);\n\tzram_slot_unlock(zram, index);\n\treturn ret;\n}\n\n"
+                        # 清理重构后在 __zram_bvec_read 中未被使用的局部变量声明，防止 -Werror 报 unused-variable
+                        for unused_decl in [
+                            "\tstruct zcomp_strm *zstrm;\n",
+                            "\tunsigned long handle;\n",
+                            "\tunsigned int size;\n",
+                            "\tvoid *src, *dst;\n",
+                            "\tvoid *src;\n",
+                            "\tvoid *dst;\n",
+                        ]:
+                            new_read_block = new_read_block.replace(unused_decl, "")
+                        zram_c = zram_c[:idx_read_start] + new_read_block + zram_c[idx_read_next:]
 
             # __zram_bvec_write primary comp
             zram_c = zram_c.replace("zstrm = zcomp_stream_get(zram->comp);",
@@ -750,10 +790,7 @@ static DEVICE_ATTR_WO(recompress);
                 reset_block = zram_c[idx_reset_start:idx_reset_end]
                 new_reset_block = reset_block.replace("\tstruct zcomp *comp;\n", "").replace("\tcomp = zram->comp;\n", "")
                 repl = """\tzram_destroy_comps(zram);
-\tif (zcomp_available_algorithm("lz4"))
-\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
-\telse
-\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 #ifdef CONFIG_ZRAM_MULTI_COMP
 \tif (zcomp_available_algorithm("zstd"))
 \t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -853,11 +890,8 @@ static DEVICE_ATTR_WO(recompress);
             if target_free_idle in zram_c:
                 zram_c = zram_c.replace(target_free_idle, repl_free_idle)
 
-            # zram_add default_compressor: 默认主算法lz4，次算法zstd/lz4hc
-            init_comps_code = """\tif (zcomp_available_algorithm("lz4"))
-\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
-\telse
-\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+            # zram_add default_compressor: 默认主算法保持 default_compressor，次算法zstd/lz4hc
+            init_comps_code = """\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 #ifdef CONFIG_ZRAM_MULTI_COMP
 \tif (zcomp_available_algorithm("zstd"))
 \t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -964,16 +998,25 @@ def apply_patch(kernel_root, patch_file, kernel_version):
         except Exception as e:
             log(f"[INFO] [轨道1] git apply 执行异常: {e}")
 
-        # 次选尝试 patch -p1
+        # 次选尝试 patch -p1 (先通过 --dry-run 确保原子性，严禁产生半修补源码污染)
         try:
-            cmd = ["patch", "-p1", "--no-backup-if-mismatch", "-F", "3", "-i", patch_file]
-            res = subprocess.run(cmd, cwd=kernel_root, capture_output=True, text=True)
-            if res.returncode == 0:
-                log(f"[OK] [轨道1] 通过 patch 命令成功打入 {kernel_version} Multi-Comp 驱动补丁！")
-                sanitize_zram_drv(kernel_root)
-                return True
-        except Exception:
-            pass
+            cmd_check = ["patch", "-p1", "--dry-run", "--no-backup-if-mismatch", "-F", "3", "-i", patch_file]
+            res_check = subprocess.run(cmd_check, cwd=kernel_root, capture_output=True, text=True)
+            if res_check.returncode == 0:
+                cmd = ["patch", "-p1", "--no-backup-if-mismatch", "-F", "3", "-i", patch_file]
+                res = subprocess.run(cmd, cwd=kernel_root, capture_output=True, text=True)
+                if res.returncode == 0:
+                    log(f"[OK] [轨道1] 通过 patch 命令成功打入 {kernel_version} Multi-Comp 驱动补丁！")
+                    sanitize_zram_drv(kernel_root)
+                    return True
+            else:
+                log(f"[INFO] [轨道1] patch -p1 --dry-run 预检测未完全通过，自动干净回退至 Python 语义修补引擎")
+        except Exception as e:
+            log(f"[INFO] [轨道1] patch 命令执行异常: {e}")
+
+        # 终极安全保障：若前序 patch 操作造成任何残留修改，立即对 zram 目录进行干净还原
+        subprocess.run(["git", "checkout", "--", "drivers/block/zram"], cwd=kernel_root, capture_output=True)
+        subprocess.run(["git", "clean", "-fd", "drivers/block/zram"], cwd=kernel_root, capture_output=True)
 
     # 2. 备用轨道：Python 语义修补引擎自适应接管
     log(f"[INFO] [轨道2] 启动自适应 Python 语义修补引擎以适配当前 {kernel_version} 内核源码...")
@@ -1023,6 +1066,7 @@ def main():
     if is_enable and not is_patch:
         if is_native:
             log(f"[OK] 检测到当前内核版本 ({kernel_version}) 原生支持 Multi-Comp，直接追加配置开启！")
+            setup_native_secondary_comp(kernel_root)
             append_config(config_file)
             sys.exit(0)
         else:
@@ -1033,6 +1077,7 @@ def main():
     if is_enable and is_patch:
         if is_native:
             log(f"[INFO] 当前内核版本 ({kernel_version}) 已原生内置 Multi-Comp 驱动支持，无需打补丁，直接追加配置开启！")
+            setup_native_secondary_comp(kernel_root)
             append_config(config_file)
             sys.exit(0)
         else:

@@ -3,7 +3,7 @@ name: SUSFS 原始补丁探测
 # 这是放在默认分支上的空壳：GitHub 只列出默认分支上存在的 workflow_dispatch 工作流。
 # 真正的探测逻辑在长期工具分支 susfs-probe 上（同名文件），运行时在 Actions 页面的
 # 「Use workflow from」里选择 susfs-probe 分支即可；本文件的输入必须与工具分支保持一致。
-# 在 dev 上直接运行只会打印提示，不会构建任何东西。
+# 在 main 上直接运行只会打印提示，不会构建任何东西。
 
 permissions:
   contents: read
@@ -76,7 +76,7 @@ on:
         description: "版本数据与已有探测结果的来源分支"
         required: false
         type: string
-        default: dev
+        default: main
 
 jobs:
   notice:
@@ -85,6 +85,6 @@ jobs:
     steps:
       - name: 提示
         run: |
-          echo "::error::这是 dev 上的空壳工作流，不会构建任何东西。"
+          echo "::error::这是 main 上的空壳工作流，不会构建任何东西。"
           echo "::error::请在 Run workflow 的「Use workflow from」里选择分支 susfs-probe 后再运行。"
           exit 1
