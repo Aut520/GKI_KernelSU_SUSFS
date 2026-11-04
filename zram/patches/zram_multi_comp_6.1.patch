@@ -760,7 +760,10 @@ index fb99592..f05ae8b 100644
 -		zcomp_destroy(zram->comp);
 -	zram->comp = NULL;
 +	zram_destroy_comps(zram);
-+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	if (zcomp_available_algorithm("lz4"))
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
++	else
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -841,7 +844,10 @@ index fb99592..f05ae8b 100644
  		goto out_cleanup_disk;
  
 -	strscpy(zram->compressor, default_compressor, sizeof(zram->compressor));
-+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	if (zcomp_available_algorithm("lz4"))
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
++	else
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");

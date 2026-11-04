@@ -755,7 +755,10 @@ index 3bfd318..2a5dffd 100644
  	memset(&zram->stats, 0, sizeof(zram->stats));
 -	zcomp_destroy(comp);
 +	zram_destroy_comps(zram);
-+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	if (zcomp_available_algorithm("lz4"))
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
++	else
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -837,7 +840,10 @@ index 3bfd318..2a5dffd 100644
  	device_add_disk(NULL, zram->disk, zram_disk_attr_groups);
  
 -	strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));
-+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
++	if (zcomp_available_algorithm("lz4"))
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
++	else
++		comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 +#ifdef CONFIG_ZRAM_MULTI_COMP
 +	if (zcomp_available_algorithm("zstd"))
 +		comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");

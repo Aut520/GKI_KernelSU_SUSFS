@@ -32,13 +32,13 @@ def append_config(config_file):
             "CONFIG_ZRAM_MEMORY_TRACKING=y\n",
             "CONFIG_CRYPTO_LZ4=y\n",
             "CONFIG_CRYPTO_ZSTD=y\n",
+            "CONFIG_ZRAM_DEF_COMP_LZ4=y\n",
+            'CONFIG_ZRAM_DEF_COMP="lz4"\n',
         ]
-        # 仅在未定义默认压缩算法时兜底追加 LZ4，避免架空 lz4kd 等已选算法
-        if "CONFIG_ZRAM_DEF_COMP" not in content:
-            configs_to_add.extend([
-                "CONFIG_ZRAM_DEF_COMP_LZ4=y\n",
-                'CONFIG_ZRAM_DEF_COMP="lz4"\n'
-            ])
+
+        # 统一将默认压缩算法对齐为 lz4
+        content = re.sub(r'CONFIG_ZRAM_DEF_COMP=.*', 'CONFIG_ZRAM_DEF_COMP="lz4"', content)
+        content = re.sub(r'CONFIG_ZRAM_DEF_COMP_[A-Za-z0-9_]+=y', '# CONFIG_ZRAM_DEF_COMP is lz4', content)
 
         new_entries = []
         for cfg in configs_to_add:
@@ -46,13 +46,12 @@ def append_config(config_file):
             if key not in content:
                 new_entries.append(cfg)
 
-        if new_entries:
-            with open(config_file, "a", encoding="utf-8") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
+            f.write(content)
+            if new_entries:
                 f.write("\n# ZRAM Multi-Comp (多压缩流) 功能配置\n")
                 f.writelines(new_entries)
-            log(f"[OK] 已成功向 {os.path.basename(config_file)} 注入 Multi-Comp 配置项")
-        else:
-            log(f"[INFO] {os.path.basename(config_file)} 中已存在相关配置项，无需重复注入")
+        log(f"[OK] 已成功向 {os.path.basename(config_file)} 注入 Multi-Comp 配置项 (默认主算法: LZ4)")
     except Exception as e:
         log(f"[WARN] 注入配置文件时发生异常: {e}")
 
@@ -85,7 +84,7 @@ def check_native_support(kernel_root, kernel_version):
 def setup_native_secondary_comp(kernel_root):
     """
     为 Linux 6.6+ / 6.12+ 原生 Multi-Comp 驱动在 zram_add / zram_reset_device 中
-    注入次级压缩算法（zstd/lz4hc）初始化，解决 Android 开机 disksize 锁死导致 recomp 为空、mmd 无法重压缩的问题。
+    注入主算法lz4、次级压缩算法（zstd/lz4hc）初始化，解决 Android 开机 disksize 锁死导致 recomp 为空、mmd 无法重压缩的问题。
     """
     zram_c_path = os.path.join(kernel_root, "drivers/block/zram/zram_drv.c")
     if not os.path.isfile(zram_c_path):
@@ -97,7 +96,10 @@ def setup_native_secondary_comp(kernel_root):
         if "ZRAM_SECONDARY_COMP" in code:
             return
 
-        comp_code = """\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+        comp_code = """\tif (zcomp_available_algorithm("lz4"))
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
+\telse
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 #ifdef CONFIG_ZRAM_MULTI_COMP
 \tif (zcomp_available_algorithm("zstd"))
 \t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -110,9 +112,9 @@ def setup_native_secondary_comp(kernel_root):
             code = code.replace(target, comp_code)
             with open(zram_c_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(code)
-            log("[OK] 已为原生 Multi-Comp 内核源码注入次级压缩算法(zstd/lz4hc)默认初始化")
+            log("[OK] 已为原生 Multi-Comp 内核源码注入主算法(lz4)与次级算法(zstd/lz4hc)默认初始化")
     except Exception as e:
-        log(f"[WARN] 注入原生次级算法失败: {e}")
+        log(f"[WARN] 注入原生算法失败: {e}")
 
 def get_patch_file_for_version(script_dir, kernel_version):
     ver = kernel_version.strip()
@@ -790,7 +792,10 @@ static DEVICE_ATTR_WO(recompress);
                 reset_block = zram_c[idx_reset_start:idx_reset_end]
                 new_reset_block = reset_block.replace("\tstruct zcomp *comp;\n", "").replace("\tcomp = zram->comp;\n", "")
                 repl = """\tzram_destroy_comps(zram);
-\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+\tif (zcomp_available_algorithm("lz4"))
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
+\telse
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 #ifdef CONFIG_ZRAM_MULTI_COMP
 \tif (zcomp_available_algorithm("zstd"))
 \t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
@@ -890,8 +895,11 @@ static DEVICE_ATTR_WO(recompress);
             if target_free_idle in zram_c:
                 zram_c = zram_c.replace(target_free_idle, repl_free_idle)
 
-            # zram_add default_compressor: 默认主算法保持 default_compressor，次算法zstd/lz4hc
-            init_comps_code = """\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+            # zram_add default_compressor: 默认主算法写死优先lz4，次算法zstd/lz4hc
+            init_comps_code = """\tif (zcomp_available_algorithm("lz4"))
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, "lz4");
+\telse
+\t\tcomp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 #ifdef CONFIG_ZRAM_MULTI_COMP
 \tif (zcomp_available_algorithm("zstd"))
 \t\tcomp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
