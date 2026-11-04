@@ -191,13 +191,15 @@ DECLARE_HOOK(android_vh_allow_domain_state,
                 if "#include <trace/hooks/pm_domain.h>" not in dg_content:
                     dg_content = "#include <trace/hooks/pm_domain.h>\n" + dg_content
 
-                # 在 __default_power_down_ok 开头注入调用点
+                # 在 __default_power_down_ok 中 genpd 声明之后注入调用点
                 target_anchor = "bool allow = true;"
                 if target_anchor in dg_content:
                     # 避免重复
                     pass
                 else:
-                    pattern_fn = re.compile(r'(static\s+bool\s+__default_power_down_ok\s*\([^)]*\)\s*\{)')
+                    pattern_fn = re.compile(
+                        r'(static\s+bool\s+__default_power_down_ok\s*\([^)]*\)\s*\{[\s\S]*?struct\s+generic_pm_domain\s*\*genpd\s*=\s*pd_to_genpd\([^)]*\)\s*;)'
+                    )
                     match = pattern_fn.search(dg_content)
                     if match:
                         inject_code = (
