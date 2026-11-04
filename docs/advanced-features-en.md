@@ -1,98 +1,128 @@
 <div align="center">
 
-# 🧩 Advanced Features
+# 🧩 Advanced Features & Deep Customization Guide
 
-**GhostLock Security Fix · Droidspaces Container Support · Custom Commit Pinning · Spoofing `/proc/config.gz`**
+**Security Vulnerability Fixes · Anti-Bricking Guard · NoMount Meta Modules · ZRAM Multi-Comp · Droidspaces Containers · Stock Config Spoofing**
 
 English | [**简体中文**](advanced-features.md)
 
-[⬅ Back to README](../README-EN.md)
+[⬅ Back to Main README](../README-EN.md)
 
 ---
 
 </div>
 
-## Contents
-
-- [🛡️ GhostLock Security Fix](#️-ghostlock-security-fix)
-- [🧪 Droidspaces Container Support (Experimental)](#-droidspaces-container-support-experimental)
-- [🔧 Custom Commit Pinning](#-custom-commit-pinning)
-- [🧪 Spoof `/proc/config.gz` (Stock Config)](#-spoof-procconfiggz-stock-config)
+> [!CAUTION]
+> **Testing Status & Compatibility Notice**:
+> All advanced features and low-level patches detailed in this document have **ONLY been fully tested and validated on `Android 14 (6.1)` and `Android 12 (5.10)` kernel branches**.
+> For other branches (`5.15`, `6.6`, `6.12`), due to structural differences and rapid symbol refactoring in upstream ACK codebases, **successful builds and proper booting are NOT guaranteed**. Please test prudently and ALWAYS create a full backup of your Boot partition beforehand!
 
 ---
 
-## 🛡️ GhostLock Security Fix
+## Contents
 
-GhostLock is a pair of high-risk Linux kernel vulnerabilities tracked as `CVE-2026-43499` and `CVE-2026-53163`. An attacker does not need Root access or an additional kernel module. The vulnerability may be exploited by any application or local process that can run code on the device.
+- [🛡️ GhostLock Vulnerability Remediation (CVE-2026-43499 / 53163)](#️-ghostlock-vulnerability-remediation-cve-2026-43499--53163)
+- [🛑 BBG Low-Level Anti-Bricking Guard (hmbird_patch)](#-bbg-low-level-anti-bricking-guard-hmbird_patch)
+- [📦 NoMount Kernel-Level Mountless Meta Modules](#-nomount-kernel-level-mountless-meta-modules)
+- [⚡ Enhanced ZRAM & Multi-Compression Streams (Multi-Comp)](#-enhanced-zram--multi-compression-streams-multi-comp)
+- [🌐 Kernel Networking Stack Enhancements (BBRv3 / IPSet / Qdisc)](#-kernel-networking-stack-enhancements-bbrv3--ipset--qdisc)
+- [🧪 Spoofing `/proc/config.gz` (Stock Config Replacement)](#-spoofing-procconfiggz-stock-config-replacement)
+- [🧪 Droidspaces Container Support (Experimental)](#-droidspaces-container-support-experimental)
+- [🔧 Custom Commit Pinning](#-custom-commit-pinning)
 
-### Potential impact
+---
 
-- **System crash or forced reboot:** An ordinary application can crash the kernel, making the device unavailable and potentially causing the loss of unsaved data.
-- **Local privilege escalation:** A more advanced exploit can cross Android security boundaries and give an ordinary application kernel-level control of the device.
-- **Public exploits are available:** Both a denial-of-service proof of concept and a complete privilege-escalation chain targeting Android ARM64 have been published. This is no longer a theoretical risk.
-- **No reliable temporary workaround exists:** Permission restrictions, application isolation, and hardening options may make exploitation harder, but they cannot fully prevent crashes or alternative exploit methods.
+## 🛡️ GhostLock Vulnerability Remediation (CVE-2026-43499 / 53163)
 
-The vulnerability cannot be triggered directly over the network. However, a malicious application, untrusted code in a shared environment, or an attacker who already gained code execution through another vulnerability can use GhostLock as the next step. Extra care should therefore be taken with applications, modules, and scripts from unknown sources.
+GhostLock represents a cluster of high-severity Linux kernel vulnerabilities tracked under `CVE-2026-43499` and `CVE-2026-53163`. Attackers do not require Root access; any unauthorized, untrusted user-space application running local code can trigger exploitation.
 
-This project can check and apply the complete fix when building kernels 5.10, 5.15, 6.1, 6.6, and 6.12. The option is disabled by default. To include GhostLock protection, manually enable `CVE-2026-43499 rtmutex fix chain` when starting a build. Both vulnerability fixes must be present together, and the workflow handles this automatically. Kernels that already contain the complete fix are not patched again.
+### Threat & Impact
+- **Denial of Service (Forced Reboot / Kernel Panic):** Any unprivileged app can force a kernel crash, causing boot loops or loss of unsaved state.
+- **Local Privilege Escalation (LPE):** Exploits lock contention in `rtmutex` to breach Android's application isolation barriers, elevating an unprivileged process to kernel-level control.
+- **Public PoCs Available:** Functional privilege escalation exploit chains for Android ARM64 are publicly documented.
 
-The fix has passed a [full build validation covering 84 kernel versions](https://github.com/zzh20188/GKI_KernelSU_SUSFS/actions/runs/29509099128). For vulnerability details, affected systems, public exploits, and mitigation guidance, read CIQ's article: [GhostLock Mitigation](https://kb.ciq.com/article/rocky-linux/rl-ghostlock-mitigation).
+### Implementation
+- **Default State**: Enabled by default (`default: true`) in this repository.
+- **Automatic Validation**: The build script inspects the target kernel tree and applies the `kernel/locking/rtmutex.c` patch chain only when fixes are not already upstreamed by Google.
+
+---
+
+## 🛑 BBG Low-Level Anti-Bricking Guard (hmbird_patch)
+
+Malicious modules or rogue utilities obtaining Root rights might attempt destructive operations such as `dd if=/dev/zero` or `blkdiscard` against essential storage partitions, bricking the device or corrupting baseband calibration data.
+
+### Implementation
+- Injects `hmbird_patch.c` into the kernel block I/O layer.
+- Enforces an immutable write-protection list covering critical partitions (such as `boot`, `init_boot`, `recovery`, `super`, `userdata`, `metadata`, `persist`, and modem partitions).
+- Destructive raw write or wipe attempts are trapped at the scheduler level and rejected.
+- **Default State**: Enabled by default (`default: true`).
+
+---
+
+## 📦 NoMount Kernel-Level Mountless Meta Modules
+
+Traditional root solutions rely on filesystem mount points (OverlayFS / bind mounts). These operations leave clearly visible traces inside `/proc/mounts` and `/proc/self/mountinfo`, which are easily inspected by bank apps and integrity scanners.
+
+### Implementation
+- Incorporates [maxsteeel/nomount](https://github.com/maxsteeel/nomount).
+- Redirects path resolution (`vfs_lookup`) and inode evaluation directly inside the kernel VFS layer.
+- Module content is substituted without issuing `mount` syscalls, leaving no mount table entries for security software to detect.
+- **Default State**: Enabled by default (`default: true`).
+
+---
+
+## ⚡ Enhanced ZRAM & Multi-Compression Streams (Multi-Comp)
+
+Background multitasking and overall Android fluidity heavily rely on fast memory compression. Stock kernels frequently limit ZRAM to single-stream execution or older compression algorithms.
+
+### Implementation
+- Unlocks modern ZSTD and LZ4 compression algorithms within the kernel ZRAM driver.
+- Enables `Multi-Comp` concurrent stream processing across multiple CPU cores, effectively eliminating lock contention under intense memory pressure.
+- Operates in synergy with Android's userland `mmd` (Memory Management Daemon) to reduce frame drops during memory compaction.
+- **Default State**: Enabled by default (`default: true`).
+
+---
+
+## 🌐 Kernel Networking Stack Enhancements (BBRv3 / IPSet / Qdisc)
+
+Tailored to improve stability and latency under cellular networks, proxies, and weak Wi-Fi signals:
+- **BBRv3 Congestion Control**: Delivers superior throughput and lower latency over congested paths compared to legacy Cubic.
+- **IPSet Packet Matching**: Accelerates route and firewall evaluation across extensive IP rulesets.
+- **Modern Qdisc Schedulers**: Enables queueing disciplines such as fq_codel and cake to eliminate bufferbloat.
+- **Default State**: Enabled by default (`default: true`).
+
+---
+
+## 🧪 Spoofing `/proc/config.gz` (Stock Config Replacement)
+
+Many integrity detection solutions inspect `/proc/config.gz` looking for telltale build symbols like `CONFIG_KSU=y` or `CONFIG_KSU_SUSFS=y`.
+
+### Implementation
+1. The repository maintains pristine factory configuration files (`config/stock_<ver>.config`).
+2. During the kernel linking stage, the internal `config_data` source embedded into the binary is substituted with the untouched stock defconfig.
+3. Userspace inspection tools extracting `/proc/config.gz` will see standard OEM compilation flags without any third-party root markers.
 
 ---
 
 ## 🧪 Droidspaces Container Support (Experimental)
 
-> **Experimental feature:** Successful build and boot is not guaranteed across all GKI versions. Always back up your boot image before flashing.
->
-> **TIPS:** The workflow uses the [official Droidspaces patches](https://github.com/ravindu644/Droidspaces-OSS/tree/main/Documentation/resources/kernel-patches/GKI) from [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS). If you have better patches, feel free to open an issue. Since there are three patch variants, you may need to test them repeatedly to find one that fits your device. Choose based on other users' feedback or your own experience.
+[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) unlocks lightweight Linux containers (such as Arch Linux or Debian with systemd) on Android utilizing native kernel namespaces and cgroups.
 
-[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) is a lightweight Linux containerization tool that lets you run full Linux environments (with systemd, OpenRC, etc.) on Android — useful for development, running servers, and more.
-
-**Supported versions:** 5.10 / 5.15 / 6.1 / 6.6 / 6.12
-
-**Usage:** When triggering a build manually, select the `Droidspaces` option:
-
-| Option | Description |
-|:---:|:---|
-| `off` | Disabled (default) |
-| `678` | Use 6_7_8 slot patch (recommended) |
-| `123` | Use 1_2_3 slot patch (fallback) |
-| `345` | Use 3_4_5 slot patch (fallback) |
-
-> **Note:** Kernel 6.12 has only one patch — any non-off option will use it.
-
-**If the build fails or bootloops after flashing:** Try switching to a different slot patch (e.g. 678 → 123 or 345). Different kernel sub-levels may require different patches.
+### Recommendations
+- Select the `Droidspaces` input parameter when manually triggering the workflow.
+- Try different slot patches (`678`, `123`, `345`) if compilation fails or bootloop occurs, as symbol alignments vary across kernel sub-levels.
 
 ---
 
 ## 🔧 Custom Commit Pinning
 
-Use the [`config/config`](../config/config) file to pin SUSFS and SukiSU to specific commits.
-
-**What is a commit?**
-
-A commit is a hash string representing the state of a repository at a specific point in time. For example, setting sukisu to `4b8644515fe6d87a109129e590ccd9d33a855dca` means using the January 30th version of SukiSU to build the kernel.
-
-**Why pin a commit?**
-
-- When upstream updates introduce bugs or compatibility issues, you can roll back to a stable version
-- When SUSFS and SukiSU versions are out of sync causing build failures, you can manually specify compatible versions
-
-**How to get a commit hash?**
-
-- SUSFS: [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)
-- SukiSU: [SukiSU-Ultra commits/builtin](https://github.com/SukiSU-Ultra/SukiSU-Ultra/commits/builtin/)
-
-Taking SUSFS as an example, first select the branch, then copy the commit hash:
-
-![Select branch](../assets/susfs_branch.png)
-![Copy commit](../assets/susfs_commit.png)
+To freeze specific commit hashes for SUSFS or SukiSU (e.g. for reproducibility or bisecting upstream regressions), configure [`config/config`](../config/config):
 
 ```ini
 # Enable custom commits
 custom=true
 
-# SUSFS commit hash per branch
+# Commit hash per SUSFS branch
 gki-android12-5.10=
 gki-android13-5.15=
 gki-android14-6.1=
@@ -101,30 +131,12 @@ gki-android15-6.6=
 # SukiSU commit hash
 sukisu=
 ```
-
-> Empty value = use the latest commit of that branch.
-
----
-
-## 🧪 Spoof `/proc/config.gz` (Stock Config)
-
-This is an advanced trick and requires no workflow toggle.  
-The build process auto-detects whether `config/stock_defconfig` exists: if present, it is applied; if absent, it is skipped.
-
-How to use:
-1. Make sure your device is running stock ROM + stock kernel.
-2. Obtain `/proc/config.gz` from your device (phone-side or PC-side workflow both work).
-3. Decompress it, rename it to `stock_defconfig`, upload it to the [`config/`](../config/) directory in your repo, and commit (can be done directly on phone).
-
-During the build, the workflow will automatically:
-- Copy it to `$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig`
-- In `$KERNEL_ROOT/common/kernel/Makefile`, switch the `$(obj)/config_data` rule from `$(KCONFIG_CONFIG)` to `arch/arm64/configs/stock_defconfig`
-- Make `/proc/config.gz` in the built kernel closer to your stock kernel config
+- Leave blank to pull the latest head commit from the respective upstream branch.
 
 ---
 
 <div align="center">
 
-[⬅ Back to README](../README-EN.md) · [简体中文](advanced-features.md)
+[⬅ Back to Main README](../README-EN.md) · [简体中文](advanced-features.md)
 
 </div>
