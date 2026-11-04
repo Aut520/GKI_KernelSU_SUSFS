@@ -94,7 +94,7 @@ mmd --client ping      # Heartbeat check
 Script: [`scripts/fix_xiaomi_shennong_display.py`](../scripts/fix_xiaomi_shennong_display.py).
 
 ### 1. Root Cause Analysis
-Xiaomi 14 Pro (`shennong`, Snapdragon 8 Gen 3 / SM8650) uses a proprietary HyperOS Display Vendor module compiled against kernel `6.1.138`. When upgrading to `6.1.140+` (e.g. `6.1.176` / `6.1.177`) ACK, upstream changes in DPU timing and removal of Vendor Hooks cause severe **high-frequency screen flickering, backlight tearing, and boot-time display dropouts**.
+Xiaomi 14 Pro (`shennong`, Snapdragon 8 Gen 3 / SM8650) uses a proprietary HyperOS Display Vendor module compiled against kernel `6.1.138`. When upgrading to `6.1.140+` (e.g. `6.1.176`/`177`/`182`+) ACK, upstream changes in DPU timing and removal of Vendor Hooks cause severe **high-frequency screen flickering, backlight tearing, and boot-time display dropouts**.
 
 ### 2. Comprehensive Six-Dimensional Fixes
 1. **DPU Physical Encoder Commit Wait Timing** (`dpu_encoder_phys_cmd.c`): Restores safe wait sequences ensuring `ctl_start` completion when hardware controller is unstarted, eliminating Dual-DSI frame tearing;

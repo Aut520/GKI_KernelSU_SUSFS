@@ -10,7 +10,7 @@ OS_PATCH_LEVEL="${5:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=========================================================="
-echo "执行小米14Pro驱动补全与屏幕闪烁修复流程 (限定 6.1.176 / 6.1.177)"
+echo "执行小米14Pro驱动补全与屏幕闪烁修复流程 (版本规则: 6.1 > 140 直接放行)"
 echo "内核源码根目录 : $KERNEL_ROOT"
 echo "是否启用开关   : $IS_ENABLED"
 echo "当前内核参数   : ${KERNEL_VERSION}.${ACTUAL_SUBLEVEL} (${OS_PATCH_LEVEL})"

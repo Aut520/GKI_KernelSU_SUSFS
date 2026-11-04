@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 小米 14 Pro (shennong, SM8650) 全系统驱动补全与屏幕闪烁修复脚本
-写死专用于 Android 14 6.1.176 / 6.1.177 GKI 内核与原厂基于 6.1.138 编译的 vendor 驱动模块协同问题：
+专用于 Android 14 6.1 高版本 (子版本 > 140，涵盖 6.1.141~6.1.182+ 全系列 LTS) GKI 内核与原厂基于 6.1.138 编译的 vendor 驱动模块协同问题：
 1. 修复 DPU 物理编码器提交等待时序 (dpu_encoder_phys_cmd_wait_for_commit_done)
 2. 放宽 DRM Atomic Modeset 克隆检查 (drm_atomic_check_valid_clones)
 3. 还原 DRM 图层尺寸对齐计算 (drm_format_info_plane_width/height)
@@ -398,10 +398,10 @@ def main():
     sub_level = sys.argv[4] if len(sys.argv) > 4 else ""
     os_patch_level = sys.argv[5] if len(sys.argv) > 5 else ""
 
-    is_enabled = str(raw_enabled).strip().lower() in ("true", "1", "yes", "on", "6.1.176", "6.1.177")
+    is_enabled = str(raw_enabled).strip().lower() in ("true", "1", "yes", "on")
 
     log("=================================================================")
-    log("检查小米 14 Pro 驱动补全与屏幕闪烁修复配置 (限定 6.1.176 / 6.1.177)...")
+    log("检查小米 14 Pro 驱动补全与屏幕闪烁修复配置 (版本规则: 6.1 > 140 直接放行)...")
     log(f"用户勾选状态: {is_enabled}")
     log(f"当前构建参数: 版本={kernel_version}, 子版本号={sub_level}, 补丁级别={os_patch_level}")
     log(f"源码目标路径: {kernel_root}")
@@ -435,13 +435,22 @@ def main():
     if actual_major and actual_minor:
         major_minor = f"{actual_major}.{actual_minor}"
 
-    # 3. 严格版本限定：支持 6.1.176 与 6.1.177，其他任何版本均干净跳过
+    # 3. 动态放行规则：大版本为 6.1 且子版本号 > 140（含 LTS 分支），直接放行应用，不写死任何具体版本号
     target_version_str = f"{major_minor}.{actual_sublevel}"
-    if major_minor != "6.1" or str(actual_sublevel) not in ("176", "177"):
-        log(f"[INFO] 当前内核版本为 {target_version_str}，不符合限定的目标版本 (6.1.176 / 6.1.177)，安全跳过补丁。")
+    is_allowed = False
+    try:
+        sub_num = int(actual_sublevel)
+        if major_minor == "6.1" and sub_num > 140:
+            is_allowed = True
+    except Exception:
+        if major_minor == "6.1":
+            is_allowed = True
+
+    if not is_allowed:
+        log(f"[INFO] 当前内核版本为 {target_version_str}，未满足 6.1 (> 140) 放行条件，安全跳过补丁。")
         sys.exit(0)
 
-    log(f"[OK] 目标版本严格匹配 (Linux {target_version_str})，开始应用完整修复...")
+    log(f"[OK] 当前内核版本为 {target_version_str} (满足 6.1 > 140)，直接放行，开始应用完整修复...")
 
     # 4. 执行全系统级 5 大关键补丁群修复
     fix_dpu_encoder_phys_cmd(kernel_root)

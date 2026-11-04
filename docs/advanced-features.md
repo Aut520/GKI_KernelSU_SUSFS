@@ -98,7 +98,7 @@ mmd --client ping      # 健康心跳检测
 小米 14 Pro（`shennong`）搭载高通骁龙 8 Gen 3（SM8650）处理器。原厂澎湃 OS 的闭源 Display Vendor 模块基于内核 `6.1.138` 编译。当使用通用构建流水线将内核升级至高版本（如 `6.1.176` / `6.1.177`）时，Google ACK 对 DRM/DPU 架构进行了多项时序变动并移除了关键 Vendor Hooks，导致设备出现**高频屏幕微闪、背光插值撕裂、双 DSI 命令模式丢帧甚至开机黑屏**。
 
 ### 2. 独家六大修复维度与实现在线机制
-- **版本限定机制（支持 6.1.176 与 6.1.177）**：工作流提供布尔开关 `fix_mi14p_flicker`（默认关闭）。为确保系统绝对稳定与可预测，**版本严格限定为经过全量验证的 6.1.176 与 6.1.177（对应 lts 最新上游）**，不再使用下拉菜单与自动模糊猜测。若当前编译内核不属于限定版本，脚本自动安全跳过并打印说明；
+- **版本放行机制（6.1 > 140 自动放行）**：工作流提供布尔开关 `fix_mi14p_flicker`（默认关闭）。为确保高兼容性，**只要大版本为 6.1 且子版本号 > 140（含 6.1.141~6.1.182+ 全系列 LTS），直接放行应用完整修复**；非 6.1 或 <= 140 低版本自动安全跳过；
 - **补全 Vendor Hook 真实调用点**：不仅在头文件中还原声明，更在 `domain_governor.c` 中真实植入 `trace_android_vh_allow_domain_state` 调用，在 `freq_table.c` 中真实植入 `trace_android_vh_freq_table_limits` 调用，让高通 Display 闭源驱动的回调能被真实触发；
 - **DPU 物理编码器提交等待时序修复**（`dpu_encoder_phys_cmd.c`）：还原为安全的等待逻辑：只要硬件控制器未 `is_started`，强制等待 `ctl_start` 信号完成，彻底消除双 DSI 命令模式下的帧撕裂闪烁；
 - **放宽 DRM Atomic Modeset 克隆检查**（`drm_atomic_helper.c`）：将 `drm_atomic_check_valid_clones` 失败时的 `-EINVAL` 返回放宽为安全放行，防止 vendor 驱动在图层 Modeset 时发生连锁丢帧；

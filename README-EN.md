@@ -60,7 +60,7 @@ This repository (`Aut520/GKI_KernelSU_SUSFS`) introduces substantial independent
   - Supports CLI status inspections (`-s`), manual triggers (`-t`), and background daemon monitoring (`-d`).
 
 ### 2. [Exclusive] Xiaomi 14 Pro (SM8650) High-Kernel Display Flickering Fix
-For Xiaomi 14 Pro (`shennong`, Snapdragon 8 Gen 3) running 6.1.140+ (e.g. 6.1.176 / 6.1.177) kernels with vendor modules compiled against 6.1.138, we implemented an automated patching suite (`scripts/fix_xiaomi_shennong_display.py`):
+For Xiaomi 14 Pro (`shennong`, Snapdragon 8 Gen 3) running 6.1.140+ (e.g. 6.1.176/177/182+) kernels with vendor modules compiled against 6.1.138, we implemented an automated patching suite (`scripts/fix_xiaomi_shennong_display.py`):
 - Restores safe wait sequences in `dpu_encoder_phys_cmd` to eradicate dual-DSI command mode tearing and high-frequency flicker;
 - Relaxes DRM atomic modeset clone validations to prevent `-EINVAL` dropouts;
 - Restores plane dimension alignment calculations in `drm_fourcc.h`;
