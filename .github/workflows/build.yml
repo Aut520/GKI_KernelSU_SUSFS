@@ -586,7 +586,7 @@ jobs:
           fi
           echo "obj-y += hmbird_patch.o" >> Makefile
 
-      - name: 补全小米14Pro驱动及修复屏幕闪烁(写死限定6.1.176)
+      - name: 补全小米14Pro驱动及修复屏幕闪烁(限定6.1.176/6.1.177)
         if: inputs.fix_mi14p_flicker
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |

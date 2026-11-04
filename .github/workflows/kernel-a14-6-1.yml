@@ -115,7 +115,7 @@ on:
         type: boolean
         default: false
       fix_mi14p_flicker:
-        description: "补全小米14Pro驱动及修复屏幕闪烁(写死限定6.1.176)"
+        description: "补全小米14Pro驱动及修复屏幕闪烁(限定6.1.176/6.1.177)"
         required: false
         type: boolean
         default: false
