@@ -10,8 +10,10 @@ on:
       - 'data/**'
       - 'web/**'
       - 'scripts/**'
-      # scripts/susfs_fixes/ 是构建期由 build.yml 调用的补丁修复脚本，与版本数据抓取无关
+      # 构建期调用的内核补丁与修补脚本，与版本数据抓取无关
       - '!scripts/susfs_fixes/**'
+      - '!scripts/manage_zram_multi_comp.*'
+      - '!scripts/fix_xiaomi_shennong_display.*'
 
 permissions:
   contents: write
