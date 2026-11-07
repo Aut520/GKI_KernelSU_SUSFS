@@ -931,6 +931,17 @@ jobs:
             gh release upload "$NEW_TAG" "$f" || true
           done
 
+      - name: 上传 NoMount 模块
+        if: inputs.use_nomount
+        continue-on-error: true
+        run: |
+          echo "准备上传 NoMount 模块..."
+          find ./downloaded-artifacts -type f -name "NoMount-*.zip" -print0 | \
+          while IFS= read -r -d '' f; do
+            echo "上传 NoMount 模块: $f"
+            gh release upload "$NEW_TAG" "$f" --clobber || true
+          done
+
       # 汇总 job 被跳过或没有产物时静默跳过
       - name: 上传 SUSFS 集成补丁
         if: needs.collect-susfs-patches.result == 'success'

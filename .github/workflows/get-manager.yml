@@ -105,15 +105,23 @@ jobs:
 
           echo "找到最新成功记录: Run ID $LATEST_RUN_ID，尝试快速拉取产物..."
           mkdir -p fetched_cache
-          if gh run download "$LATEST_RUN_ID" -R "$GITHUB_REPOSITORY" --pattern "${TARGET_VARIANT}-Manager*" --pattern "susfs-*" -D fetched_cache 2>/dev/null; then
+          if gh run download "$LATEST_RUN_ID" -R "$GITHUB_REPOSITORY" --pattern "${TARGET_VARIANT}-Manager*" --pattern "susfs-*" --pattern "nomount-module*" -D fetched_cache 2>/dev/null; then
             APK_FILE=$(find fetched_cache -type f -name "*.apk" | head -n 1 || true)
             SUS_FILE=$(find fetched_cache -type f -name "ksu_module_susfs.zip" | head -n 1 || true)
+            NOMOUNT_FILE=$(find fetched_cache -type f -name "NoMount-*.zip" | head -n 1 || true)
 
             if [ -n "$APK_FILE" ] && [ -n "$SUS_FILE" ]; then
               echo "🎉 成功直接从 Run ID $LATEST_RUN_ID 提取到 $TARGET_VARIANT 管理器与 SUSFS 模块！"
               mkdir -p manager-artifacts susfs-module
               cp "$APK_FILE" manager-artifacts/
               cp "$SUS_FILE" susfs-module/
+
+              if [ -n "$NOMOUNT_FILE" ]; then
+                echo "🎉 顺便提取到 NoMount 模块: $(basename "$NOMOUNT_FILE")"
+                mkdir -p nomount-module
+                cp "$NOMOUNT_FILE" nomount-module/
+                echo "HAS_NOMOUNT=true" >> "$GITHUB_ENV"
+              fi
 
               KSU_VER=$(basename "$APK_FILE" | grep -o -E '[0-9]{5}' | head -n 1 || echo "20000")
               SUS_DIR=$(find fetched_cache -mindepth 1 -maxdepth 1 -type d -name "susfs-*" | head -n 1 || true)
@@ -440,6 +448,71 @@ jobs:
           rm -rf "$SRC_DIR"
           echo "SUSFS_NAME=$SUSFS_NAME" >> "$GITHUB_ENV"
 
+      - name: 获取 NoMount DEV 模块
+        id: add_NoMount
+        if: env.HAS_NOMOUNT != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p nomount-module
+          echo "🔍 尝试获取 maxsteeel/nomount dev 分支最新成功构建产物..."
+
+          DEV_RUN_ID=$(gh run list --repo maxsteeel/nomount --branch dev --workflow "build module" --status success -L 1 --json databaseId -q '.[0].databaseId' || true)
+
+          SUCCESS=false
+          if [ -n "$DEV_RUN_ID" ]; then
+            echo "找到最新 dev 构建 Run ID: $DEV_RUN_ID，正在拉取 NoMount 产物..."
+            mkdir -p nomount_tmp
+            if gh run download "$DEV_RUN_ID" --repo maxsteeel/nomount --pattern "NoMount-*" -D nomount_tmp 2>/dev/null; then
+              ART_DIR=$(find nomount_tmp -mindepth 1 -maxdepth 1 -type d -name "NoMount-*" | head -n 1 || true)
+              if [ -n "$ART_DIR" ] && [ -f "$ART_DIR/module.prop" ]; then
+                ART_NAME=$(basename "$ART_DIR")
+                ZIP_NAME="${ART_NAME}.zip"
+                echo "正在将 $ART_NAME 打包为 Magisk/KernelSU 模块 ZIP: $ZIP_NAME..."
+                python3 -c "import textwrap; exec(textwrap.dedent('''
+                    import os, sys, zipfile
+                    src, out = sys.argv[1], sys.argv[2]
+                    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+                        for root, _, files in os.walk(src):
+                            for f in files:
+                                full_path = os.path.join(root, f)
+                                arcname = os.path.relpath(full_path, src)
+                                st = os.stat(full_path)
+                                zi = zipfile.ZipInfo.from_file(full_path, arcname)
+                                zi.external_attr = (st.st_mode & 0xFFFF) << 16
+                                with open(full_path, 'rb') as fp:
+                                    z.writestr(zi, fp.read())
+                '''))" "$ART_DIR" "nomount-module/$ZIP_NAME"
+
+                if [ -f "nomount-module/$ZIP_NAME" ] && unzip -t "nomount-module/$ZIP_NAME" >/dev/null 2>&1; then
+                  echo "🎉 成功获取并打包 NoMount DEV 模块: $ZIP_NAME"
+                  SUCCESS=true
+                fi
+              fi
+            fi
+            rm -rf nomount_tmp
+          fi
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo "⚠️ 获取 dev 构建产物失败，尝试回退至 maxsteeel/nomount 官方最新 Release 兜底..."
+            REL_URL=$(gh release view -R maxsteeel/nomount --json assets -q '.assets[] | select(.name | startswith("NoMount-") and endswith(".zip")) | .url' | head -n 1 || true)
+            if [ -n "$REL_URL" ]; then
+              REL_NAME=$(basename "$REL_URL")
+              echo "正在下载官方 Release: $REL_NAME"
+              curl -fsSL -o "nomount-module/$REL_NAME" "$REL_URL"
+              if [ -f "nomount-module/$REL_NAME" ] && unzip -t "nomount-module/$REL_NAME" >/dev/null 2>&1; then
+                echo "✅ 官方 Release 兜底拉取成功！"
+                SUCCESS=true
+              fi
+            fi
+          fi
+
+          if [ "$SUCCESS" == "true" ]; then
+            echo "HAS_NOMOUNT=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::未能获取到 NoMount 模块产物"
+          fi
+
       # =========================================================================
       # 产物上传阶段
       # =========================================================================
@@ -487,3 +560,11 @@ jobs:
         with:
           name: susfs-${{ env.SUSFS_NAME }}
           path: ./susfs-module/*
+
+      # 4. 上传 NoMount 模块
+      - name: 上传 NoMount 模块
+        if: env.HAS_NOMOUNT == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: nomount-module
+          path: ./nomount-module/*

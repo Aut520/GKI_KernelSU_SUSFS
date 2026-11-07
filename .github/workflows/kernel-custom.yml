@@ -459,6 +459,17 @@ jobs:
             fi
           done
 
+          # 3. 复制 NoMount 模块（当启用 NoMount 时）
+          if [ "${{ inputs.use_nomount }}" == "true" ]; then
+            find ./downloaded-artifacts -type f -name "NoMount-*.zip" | while read -r mod; do
+              fname=$(basename "$mod")
+              if [ ! -f "./release-assets/$fname" ]; then
+                echo "纳入 NoMount 模块附件: $fname"
+                cp "$mod" "./release-assets/$fname"
+              fi
+            done
+          fi
+
           echo "准备上传的 Release 附件列表:"
           ls -lh ./release-assets/
 
