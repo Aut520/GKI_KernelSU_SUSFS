@@ -328,26 +328,22 @@ jobs:
           fi
 
           CUSTOM_VER="${{ inputs.version }}"
-          DATE_STR=$(date -u +'%Y%m%d_%H%M')
+          # 清理自定义版本中的非法字符，并去除首尾连字符与点号
+          CLEAN_CUSTOM_VER=$(echo "$CUSTOM_VER" | sed -E 's/[^a-zA-Z0-9._-]+/-/g; s/^[-.]+//; s/[-.]+$//; s/-+/-/g')
 
-          if [ -n "$CUSTOM_VER" ]; then
-            BASE_TITLE="GKI Kernel: ${CUSTOM_VER} (${KERNEL_FULL}-${PATCH_LEVEL})"
-            TAG_BASE="${CUSTOM_VER}-${KERNEL_FULL}-${PATCH_LEVEL}"
+          if [ -n "$CLEAN_CUSTOM_VER" ]; then
+            TAG_BASE="${KERNEL_FULL}-${CLEAN_CUSTOM_VER}"
+            BASE_TITLE="GKI Kernel: ${KERNEL_FULL}-${CLEAN_CUSTOM_VER}"
           else
-            BASE_TITLE="GKI Kernel: ${KERNEL_FULL}-${PATCH_LEVEL} [${KSU_NAME}]"
             TAG_BASE="${KERNEL_FULL}-${PATCH_LEVEL}-${KSU_NAME}"
-          fi
-
-          CLEAN_TAG_BASE=$(echo "$TAG_BASE" | sed -E 's/[^a-zA-Z0-9._-]+/-/g; s/^[-.]+//; s/[-.]+$//; s/-+/-/g')
-          if [ -z "$CLEAN_TAG_BASE" ]; then
-            CLEAN_TAG_BASE="${KERNEL_FULL}-${PATCH_LEVEL}-${KSU_NAME}"
+            BASE_TITLE="GKI Kernel: ${KERNEL_FULL}-${PATCH_LEVEL} [${KSU_NAME}]"
           fi
 
           if [ "${{ inputs.release_type }}" == "Pre-Release" ]; then
-            TAG_NAME="${CLEAN_TAG_BASE}-preview-${DATE_STR}"
+            TAG_NAME="${TAG_BASE}-preview"
             RELEASE_TITLE="${BASE_TITLE} [Pre-Release]"
           else
-            TAG_NAME="${CLEAN_TAG_BASE}-${DATE_STR}"
+            TAG_NAME="${TAG_BASE}"
             RELEASE_TITLE="${BASE_TITLE}"
           fi
 
@@ -476,7 +472,7 @@ jobs:
           echo "推送 Tag 到远程仓库: origin refs/tags/$TAG_NAME"
           git push -f origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
 
-      - name: 创建 GitHub Release 并上传附件
+      - name: 创建或更新 GitHub Release 并上传附件
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -485,12 +481,21 @@ jobs:
             PRERELEASE_FLAG="--prerelease"
           fi
 
-          echo "创建 Release 标签: $TAG_NAME"
-          gh release create "$TAG_NAME" \
-            --repo "${REPO_OWNER}/${REPO_NAME}" \
-            --title "$RELEASE_TITLE" \
-            --notes-file release_body.md \
-            $PRERELEASE_FLAG
+          if gh release view "$TAG_NAME" --repo "${REPO_OWNER}/${REPO_NAME}" > /dev/null 2>&1; then
+            echo "Release $TAG_NAME 已存在，更新发布说明与信息..."
+            gh release edit "$TAG_NAME" \
+              --repo "${REPO_OWNER}/${REPO_NAME}" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_body.md \
+              $PRERELEASE_FLAG
+          else
+            echo "创建 Release 标签: $TAG_NAME"
+            gh release create "$TAG_NAME" \
+              --repo "${REPO_OWNER}/${REPO_NAME}" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_body.md \
+              $PRERELEASE_FLAG
+          fi
 
           echo "正在上传附件到 Release..."
           for asset in ./release-assets/*; do
