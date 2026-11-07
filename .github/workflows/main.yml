@@ -76,6 +76,11 @@ on:
         type: string
         default: ""
         required: false
+      custom_release_notes:
+        description: "Release 额外说明 (可选，追加展示在发布说明下方)"
+        type: string
+        default: ""
+        required: false
 
       # ==================== 开关（默认开启） ====================
       build_all:
@@ -744,6 +749,8 @@ jobs:
           done
 
       - name: 生成发布说明
+        env:
+          CUSTOM_NOTES: ${{ inputs.custom_release_notes }}
         run: |
           BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
           if [[ "$KSU_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -872,6 +879,10 @@ jobs:
 
           Unicode 零宽绕过修复请使用 Xposed 模块：https://t.me/real5ec1cff/268
           EOF
+
+          if [ -n "${CUSTOM_NOTES}" ]; then
+            printf "\n### 📢 额外说明\n\n%s\n" "${CUSTOM_NOTES}" >> release_body.md
+          fi
 
       - name: 生成版本标签
         run: |

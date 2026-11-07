@@ -92,6 +92,11 @@ on:
         required: false
         type: string
         default: ""
+      custom_release_notes:
+        description: "Release 额外说明 (可选，追加展示在发布说明下方)"
+        required: false
+        type: string
+        default: ""
 
       # ==================== 开关（默认关闭） ====================
       use_zram:
@@ -348,6 +353,8 @@ jobs:
           echo "KPM_STR=$KPM_STR" >> $GITHUB_ENV
 
       - name: 生成 Release 说明
+        env:
+          CUSTOM_NOTES: ${{ inputs.custom_release_notes }}
         run: |
           BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
           cat > release_body.md << EOF
@@ -384,6 +391,10 @@ jobs:
           > 3. 若遇到任何启动异常，请第一时间刷回官方 Boot 镜像恢复。
 
           EOF
+
+          if [ -n "${CUSTOM_NOTES}" ]; then
+            printf "\n### 📢 额外说明\n\n%s\n" "${CUSTOM_NOTES}" >> release_body.md
+          fi
 
       - name: 下载构建产物
         uses: actions/download-artifact@v8
