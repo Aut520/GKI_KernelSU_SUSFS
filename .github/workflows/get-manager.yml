@@ -356,8 +356,8 @@ jobs:
           if [ -f "susfs-module/ksu_module_susfs.zip" ]; then
             if unzip -t "susfs-module/ksu_module_susfs.zip" >/dev/null 2>&1; then
               echo "🎉 检测到上游未更新且已命中构建缓存，直接复用已缓存产物，免去重复拉取与构建！"
-              MODULE_PROP_VER=$(unzip -p "susfs-module/ksu_module_susfs.zip" module.prop 2>/dev/null | awk -F '=' '$1 == "version" { print $2 }' || true)
-              SUSFS_NAME="${MODULE_PROP_VER:-${{ steps.get_version.outputs.sversion }}}"
+              SHORT_SHA=$(echo "${{ steps.check_susfs_upstream.outputs.upstream_sha }}" | cut -c1-7)
+              SUSFS_NAME="release-1.5.2+_${SHORT_SHA}"
               echo "SUSFS_NAME=$SUSFS_NAME" >> "$GITHUB_ENV"
               exit 0
             else
@@ -380,11 +380,8 @@ jobs:
           fi
           find "$SRC_DIR" -maxdepth 1 -type f -name "*.sh" -exec chmod 755 {} +
 
-          # 规范 module.prop 版本标识
-          if grep -q "version=v1.5.2-R" "$SRC_DIR/module.prop"; then
-            sed -i "s/version=v1.5.2-R.*/version=v1.5.2-CI-${SHORT_SHA}/" "$SRC_DIR/module.prop"
-          fi
-          SUSFS_NAME=$(awk -F '=' '$1 == "version" { print $2 }' "$SRC_DIR/module.prop" || echo "v1.5.2")
+          # 规范产物命名，与原版保持完全一致 (release-1.5.2+_<short_sha>)
+          SUSFS_NAME="release-1.5.2+_${SHORT_SHA}"
 
           # 打包模块（使用 Python 打包避免 cd 且保留 755 文件权限）
           mkdir -p susfs-module
