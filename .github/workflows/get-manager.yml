@@ -4,20 +4,24 @@ permissions:
   actions: read
 
 on:
+  schedule:
+    # 每两天北京时间早上 08:00 (UTC 00:00) 自动定时执行一次全量获取与构建
+    - cron: '0 0 */2 * *'
   workflow_dispatch:
     inputs:
       kernelsu_variant:
-        description: "KernelSU 分支/变体"
+        description: "KernelSU 分支/变体 (定时运行或选 All 时自动获取所有主流变体)"
         required: true
         type: choice
-        default: "Official"
+        default: "All"
         options:
+          - "All"
           - "Official"
           - "Next"
           - "SukiSU"
+          - "BakaSU"
           - "SukiSU(40726)"
           - "SukiSU(40548)"
-          - "BakaSU"
   workflow_call:
     inputs:
       kernelsu_variant:
@@ -36,8 +40,8 @@ jobs:
   get_ksu_manager:
     runs-on: ubuntu-24.04
     outputs:
-      ksuVer: ${{ steps.get_version.outputs.kversion }}
-      susVer: ${{ steps.get_version.outputs.sversion }}
+      ksuVer: ${{ steps.try_reuse.outputs.reused == 'true' && steps.try_reuse.outputs.kversion || steps.get_version.outputs.kversion }}
+      susVer: ${{ steps.try_reuse.outputs.reused == 'true' && steps.try_reuse.outputs.sversion || steps.get_version.outputs.sversion }}
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
@@ -73,241 +77,276 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git curl jq zip unzip
 
-      - name: 获取 KSU & SUSFS 版本
-        id: get_version
+      # =========================================================================
+      # 流程 1: 消费端快速复用
+      # 当由内核构建工作流调用 (workflow_call) 或指定单变体运行时，
+      # 优先从 GetManager 独立工作流最新一次成功定时运行的产物中直接提取，免去重复爬取与编译！
+      # =========================================================================
+      - name: 优先从 GetManager 最新工作流产物复用
+        id: try_reuse
         run: |
+          TARGET_VARIANT="${{ inputs.kernelsu_variant }}"
+          EVENT_NAME="${{ github.event_name }}"
 
-          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            echo "This is the Next variant"
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "This is the SukiSU variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40726)" ]; then
-            echo "This is the SukiSU(40726) variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
-            git -C KernelSU checkout 5da529942987b834c2b02a4819eaa298a8383bf4
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40548)" ]; then
-            echo "This is the SukiSU(40548) variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
-            git -C KernelSU checkout 3170a48c508f6330ea636c51835a84573fe56ef5
-          elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
-            echo "This is the BakaSU variant"
-            git clone https://github.com/Baka-SU/BakaSU.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            echo "This is the Official"
-            git clone https://github.com/tiann/KernelSU.git KernelSU
-          else
-            echo "Unknown variant"
-            exit 1
-          fi
-
-          KSU_GIT_VERSION=$(git -C KernelSU rev-list --count HEAD)
-
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40726)" ]; then
-            KSU_VERSION=40726
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40548)" ]; then
-            KSU_VERSION=40548
-          elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
-            KSU_VERSION=$((30700 + KSU_GIT_VERSION))
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            KSU_VERSION=$((20000 + KSU_GIT_VERSION))
-          elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            KSU_VERSION=$((30000 + KSU_GIT_VERSION))
-          fi
-          echo $KSU_VERSION
-          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
-
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40726)" ]; then
-            SUS_VERSION="v2.1.0"
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU(40548)" ]; then
-            SUS_VERSION="v2.0.0"
-          else
-            INFO="https://raw.githubusercontent.com/sidex15/susfs4ksu-module/v1.5.2+/module.prop"
-            SUS_VERSION=$(curl -fsSL "$INFO" | awk -F '=' '$1 == "version" { print $2 }' || true)
-            if [ -z "$SUS_VERSION" ]; then
-              SUS_VERSION="v1.5.2"
-            fi
-          fi
-          echo "SUSFS_VERSION: $SUS_VERSION"
-
-          echo "kversion=$KSU_VERSION" >> $GITHUB_OUTPUT
-          echo "sversion=$SUS_VERSION" >> $GITHUB_OUTPUT
-
-      - name: 添加 KernelSU
-        id: add_KSU
-        continue-on-error: true
-        run: |
-          case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU(40726)") LEGACY_RELEASE_TAG="v2.1.0-r2"; LEGACY_DIR="SukiSU_40726" ;;
-            "SukiSU(40548)") LEGACY_RELEASE_TAG="v2.0.0-r34"; LEGACY_DIR="SukiSU_40548" ;;
-            *) LEGACY_RELEASE_TAG="" ;;
-          esac
-          if [ -n "$LEGACY_RELEASE_TAG" ]; then
-            echo "下载 ${{ inputs.kernelsu_variant }} 管理器..."
-            mkdir -p "manager-artifacts/$LEGACY_DIR"
-            MANAGER_URL=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/tags/$LEGACY_RELEASE_TAG" |
-              jq -r '.assets[] | select(.name | startswith("SukiSU_") and endswith("-release.apk")) | .browser_download_url' |
-              head -n 1 || true)
-            if [ -z "$MANAGER_URL" ]; then
-              echo "未在当前仓库找到 ${{ inputs.kernelsu_variant }} 管理器 Release 资产。"
-              exit 1
-            fi
-            curl -fL -o "manager-artifacts/$LEGACY_DIR/${LEGACY_DIR}-release.apk" "$MANAGER_URL"
+          if [ "$EVENT_NAME" == "schedule" ] || [ "$TARGET_VARIANT" == "All" ]; then
+            echo "当前为定时全量更新或手动全量获取模式，跳过复用，直接执行完整采集与构建流程..."
+            echo "reused=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            echo "KernelSU Next..."
-            REPO="KernelSU-Next/KernelSU-Next"
-            KSUM="manager"
-            BRANCH="dev"
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "SukiSU..."
-            REPO="SukiSU-Ultra/SukiSU-Ultra"
-            KSUM="manager"
-          elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
-            echo "BakaSU..."
-            REPO="Baka-SU/BakaSU"
-            KSUM="manager"
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            echo "KSU..."
-            REPO="tiann/KernelSU"
-            KSUM="manager"
+          echo "🔍 当前为按需获取模式 ($TARGET_VARIANT)，正在检索 GetManager 工作流最新成功产物..."
+          LATEST_RUN_ID=$(gh run list --workflow=get-manager.yml -R "$GITHUB_REPOSITORY" --status=success --limit 10 --json databaseId -q '.[] | select(.databaseId != '"${GITHUB_RUN_ID:-0}"') | .databaseId' | head -n 1 || true)
+
+          if [ -z "$LATEST_RUN_ID" ]; then
+            echo "未检测到已有的 GetManager 成功运行记录，将回退至现场获取与构建流程..."
+            echo "reused=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          FILENAME=$([[ "${{ inputs.kernelsu_variant }}" == "Next" ]] && echo "build-manager-ci.yml" || echo "build-manager.yml")
+          echo "找到最新成功记录: Run ID $LATEST_RUN_ID，尝试快速拉取产物..."
+          mkdir -p fetched_cache
+          if gh run download "$LATEST_RUN_ID" -R "$GITHUB_REPOSITORY" --pattern "${TARGET_VARIANT}-Manager*" --pattern "susfs-*" -D fetched_cache 2>/dev/null; then
+            APK_FILE=$(find fetched_cache -type f -name "*.apk" | head -n 1 || true)
+            SUS_FILE=$(find fetched_cache -type f -name "ksu_module_susfs.zip" | head -n 1 || true)
 
+            if [ -n "$APK_FILE" ] && [ -n "$SUS_FILE" ]; then
+              echo "🎉 成功直接从 Run ID $LATEST_RUN_ID 提取到 $TARGET_VARIANT 管理器与 SUSFS 模块！"
+              mkdir -p manager-artifacts susfs-module
+              cp "$APK_FILE" manager-artifacts/
+              cp "$SUS_FILE" susfs-module/
 
-          # 按内核 KSU 版本选择 Manager，避免 APK 版本领先于内核版本
-          TARGET_KSU_VERSION="${KSU_VERSION:-}"
-          if ! [[ "$TARGET_KSU_VERSION" =~ ^[0-9]+$ ]]; then
-            echo "无效的目标 KSU 版本: $TARGET_KSU_VERSION"
-            exit 1
-          fi
+              KSU_VER=$(basename "$APK_FILE" | grep -o -E '[0-9]{5}' | head -n 1 || echo "20000")
+              SUS_DIR=$(find fetched_cache -mindepth 1 -maxdepth 1 -type d -name "susfs-*" | head -n 1 || true)
+              SUS_NAME=$(basename "$SUS_DIR" | sed 's/^susfs-//' || echo "release-1.5.2+")
 
-          calculate_run_ksu_version() {
-            local head_sha="$1"
-            if ! git -C KernelSU cat-file -e "$head_sha^{commit}" 2>/dev/null; then
-              git -C KernelSU fetch --no-tags origin "$head_sha" >/dev/null 2>&1 || true
+              echo "KSU_VERSION=$KSU_VER" >> "$GITHUB_ENV"
+              echo "SUSFS_NAME=$SUS_NAME" >> "$GITHUB_ENV"
+              echo "HAS_SINGLE=true" >> "$GITHUB_ENV"
+              echo "SINGLE_ART_NAME=${TARGET_VARIANT}-Manager(${KSU_VER})" >> "$GITHUB_ENV"
+
+              echo "kversion=$KSU_VER" >> "$GITHUB_OUTPUT"
+              echo "sversion=$SUS_NAME" >> "$GITHUB_OUTPUT"
+              echo "reused=true" >> "$GITHUB_OUTPUT"
+              rm -rf fetched_cache
+              exit 0
             fi
-            if ! git -C KernelSU cat-file -e "$head_sha^{commit}" 2>/dev/null; then
+          fi
+
+          echo "未能匹配到完整的 $TARGET_VARIANT 产物，将回退至现场获取与构建流程..."
+          echo "reused=false" >> "$GITHUB_OUTPUT"
+          rm -rf fetched_cache
+
+      # =========================================================================
+      # 流程 2: 生产端全量/现场获取与构建
+      # 当定时触发、手动 All 或未能命中历史产物时执行
+      # =========================================================================
+      - name: 获取 KSU & SUSFS 版本
+        id: get_version
+        if: steps.try_reuse.outputs.reused != 'true'
+        run: |
+          TARGET="${{ inputs.kernelsu_variant }}"
+          [ -z "$TARGET" ] && TARGET="All"
+
+          # 获取 SUSFS 官方最新版本
+          INFO="https://raw.githubusercontent.com/sidex15/susfs4ksu-module/v1.5.2+/module.prop"
+          SUS_VERSION=$(curl -fsSL "$INFO" | awk -F '=' '$1 == "version" { print $2 }' || true)
+          [ -z "$SUS_VERSION" ] && SUS_VERSION="v1.5.2"
+          echo "SUSFS_VERSION: $SUS_VERSION"
+          echo "sversion=$SUS_VERSION" >> "$GITHUB_OUTPUT"
+
+          # 若为单变体，计算其特定 KSU 版本
+          if [ "$TARGET" != "All" ]; then
+            case "$TARGET" in
+              "Next") CLONE_URL="https://github.com/KernelSU-Next/KernelSU-Next.git" ;;
+              "SukiSU") CLONE_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git" ;;
+              "BakaSU") CLONE_URL="https://github.com/Baka-SU/BakaSU.git" ;;
+              "Official"|*) CLONE_URL="https://github.com/tiann/KernelSU.git" ;;
+            esac
+
+            git clone --depth 1 "$CLONE_URL" KernelSU_tmp
+            GIT_COUNT=$(git -C KernelSU_tmp rev-list --count HEAD)
+            rm -rf KernelSU_tmp
+
+            case "$TARGET" in
+              "SukiSU") KSU_VER=$((40000 + GIT_COUNT - 2815)) ;;
+              "SukiSU(40726)") KSU_VER=40726 ;;
+              "SukiSU(40548)") KSU_VER=40548 ;;
+              "BakaSU") KSU_VER=$((30700 + GIT_COUNT)) ;;
+              "Official") KSU_VER=$((20000 + GIT_COUNT)) ;;
+              "Next") KSU_VER=$((30000 + GIT_COUNT)) ;;
+              *) KSU_VER=$((20000 + GIT_COUNT)) ;;
+            esac
+            echo "kversion=$KSU_VER" >> "$GITHUB_OUTPUT"
+            echo "KSU_VERSION=$KSU_VER" >> "$GITHUB_ENV"
+          else
+            echo "kversion=20000" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 添加 KernelSU 管理器
+        id: add_KSU
+        if: steps.try_reuse.outputs.reused != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          fetch_manager() {
+            local V="$1"
+            local OUT_DIR="$2"
+            mkdir -p "$OUT_DIR"
+
+            case "$V" in
+              "SukiSU(40726)")
+                local tag="v2.1.0-r2"
+                local url
+                url=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" |
+                  jq -r '.assets[] | select(.name | startswith("SukiSU_") and endswith("-release.apk")) | .browser_download_url' | head -n 1 || true)
+                [ -n "$url" ] && curl -fL -o "$OUT_DIR/SukiSU_40726-release.apk" "$url"
+                return 0
+                ;;
+              "SukiSU(40548)")
+                local tag="v2.0.0-r34"
+                local url
+                url=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" |
+                  jq -r '.assets[] | select(.name | startswith("SukiSU_") and endswith("-release.apk")) | .browser_download_url' | head -n 1 || true)
+                [ -n "$url" ] && curl -fL -o "$OUT_DIR/SukiSU_40548-release.apk" "$url"
+                return 0
+                ;;
+              "Next")
+                local repo="KernelSU-Next/KernelSU-Next"
+                local ksum="manager"
+                local branch="dev"
+                local workflow="build-manager-ci.yml"
+                local clone_url="https://github.com/KernelSU-Next/KernelSU-Next.git"
+                ;;
+              "SukiSU")
+                local repo="SukiSU-Ultra/SukiSU-Ultra"
+                local ksum="manager"
+                local branch=""
+                local workflow="build-manager.yml"
+                local clone_url="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
+                ;;
+              "BakaSU")
+                local repo="Baka-SU/BakaSU"
+                local ksum="manager"
+                local branch=""
+                local workflow="build-manager.yml"
+                local clone_url="https://github.com/Baka-SU/BakaSU.git"
+                ;;
+              "Official"|*)
+                local repo="tiann/KernelSU"
+                local ksum="manager"
+                local branch=""
+                local workflow="build-manager.yml"
+                local clone_url="https://github.com/tiann/KernelSU.git"
+                ;;
+            esac
+
+            echo "正在查找 $V 管理器构建..."
+            git clone --depth 1 "$clone_url" "kdir_${V}"
+            local head_count
+            head_count=$(git -C "kdir_${V}" rev-list --count HEAD)
+            case "$V" in
+              "SukiSU") local target_ver=$((40000 + head_count - 2815)) ;;
+              "BakaSU") local target_ver=$((30700 + head_count)) ;;
+              "Official") local target_ver=$((20000 + head_count)) ;;
+              "Next") local target_ver=$((30000 + head_count)) ;;
+              *) local target_ver=$((20000 + head_count)) ;;
+            esac
+
+            local runs_url="https://api.github.com/repos/$repo/actions/workflows/$workflow/runs?status=success&per_page=30"
+            [ -n "$branch" ] && runs_url="https://api.github.com/repos/$repo/actions/workflows/$workflow/runs?branch=$branch&status=success&per_page=30"
+
+            local download_list=""
+            local best_ver=0
+
+            for page in 1 2 3; do
+              local runs
+              runs=$(curl -s -H "Authorization: token $GH_TOKEN" "$runs_url&page=$page")
+              local count
+              count=$(printf '%s' "$runs" | jq '.workflow_runs | length' 2>/dev/null || echo 0)
+              [ "$count" -eq 0 ] && break
+
+              for idx in $(seq 0 $((count - 1))); do
+                local bid hsha
+                bid=$(printf '%s' "$runs" | jq -r ".workflow_runs[$idx].id")
+                hsha=$(printf '%s' "$runs" | jq -r ".workflow_runs[$idx].head_sha")
+
+                git -C "kdir_${V}" fetch --no-tags origin "$hsha" >/dev/null 2>&1 || true
+                if ! git -C "kdir_${V}" cat-file -e "$hsha^{commit}" 2>/dev/null; then
+                  continue
+                fi
+
+                local c_rev
+                c_rev=$(git -C "kdir_${V}" rev-list --count "$hsha")
+                local r_ver=0
+                case "$V" in
+                  "SukiSU") r_ver=$((40000 + c_rev - 2815)) ;;
+                  "BakaSU") r_ver=$((30700 + c_rev)) ;;
+                  "Official") r_ver=$((20000 + c_rev)) ;;
+                  "Next") r_ver=$((30000 + c_rev)) ;;
+                esac
+
+                [ "$r_ver" -gt "$target_ver" ] && continue
+
+                local arts
+                arts=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/$repo/actions/runs/$bid/artifacts")
+                local cand=""
+                if [ "$V" == "Next" ]; then
+                  cand=$(printf '%s' "$arts" | jq -r --arg name "$ksum" '.artifacts[] | select(.name == $name) | "\(.name)\t\(.archive_download_url)"')
+                elif [ "$V" == "BakaSU" ]; then
+                  cand=$(printf '%s' "$arts" | jq -r '.artifacts[] | select(.name == "Manager-release" or .name == "Spoofed-Manager-release") | "\(.name)\t\(.archive_download_url)"')
+                else
+                  cand=$(printf '%s' "$arts" | jq -r --arg needle "$ksum" '.artifacts[] | select((.name | ascii_downcase) | contains($needle)) | "\(.name)\t\(.archive_download_url)"')
+                fi
+
+                if [ -n "$cand" ] && [ "$r_ver" -gt "$best_ver" ]; then
+                  download_list="$cand"
+                  best_ver="$r_ver"
+                fi
+                [ "$r_ver" -eq "$target_ver" ] && break 2
+              done
+            done
+
+            rm -rf "kdir_${V}"
+            if [ -z "$download_list" ]; then
+              echo "::warning::未能找到 $V 的 Manager 产物"
               return 1
             fi
 
-            local git_version
-            git_version=$(git -C KernelSU rev-list --count "$head_sha")
-            case "${{ inputs.kernelsu_variant }}" in
-              "SukiSU") echo $((40000 + git_version - 2815)) ;;
-              "BakaSU") echo $((30700 + git_version)) ;;
-              "Official") echo $((20000 + git_version)) ;;
-              "Next") echo $((30000 + git_version)) ;;
-              *) return 1 ;;
-            esac
-          }
-
-          get_manager_artifacts() {
-            local artifacts="$1"
-            if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-              printf '%s' "$artifacts" | jq -r --arg name "$KSUM" \
-                '.artifacts[] | select(.name == $name) | "\(.name)\t\(.archive_download_url)"'
-            elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
-              printf '%s' "$artifacts" | jq -r \
-                '.artifacts[] | select(.name == "Manager-release" or .name == "Spoofed-Manager-release") | "\(.name)\t\(.archive_download_url)"'
-            else
-              printf '%s' "$artifacts" | jq -r --arg needle "$KSUM" \
-                '.artifacts[] | select((.name | ascii_downcase) | contains($needle)) | "\(.name)\t\(.archive_download_url)"'
-            fi
-          }
-
-          DOWNLOAD_LIST=""
-          BEST_VERSION=0
-          BEST_BUILD_ID=""
-          BEST_BRANCH=""
-          RUNS_URL="https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=30"
-          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            RUNS_URL="https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?branch=$BRANCH&status=success&per_page=30"
-          fi
-
-          echo "开始查找不高于 KSU $TARGET_KSU_VERSION 的 Manager 产物..."
-          for PAGE in $(seq 1 10); do
-            echo "--------------------------------------------------"
-            echo "正在检查第 ${PAGE} 页历史构建..."
-            RUNS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$RUNS_URL&page=$PAGE")
-            RUN_COUNT=$(printf '%s' "$RUNS" | jq '.workflow_runs | length')
-            if [ "$RUN_COUNT" -eq 0 ]; then
-              break
-            fi
-
-            for INDEX in $(seq 0 $((RUN_COUNT - 1))); do
-              BUILD_ID=$(printf '%s' "$RUNS" | jq -r ".workflow_runs[$INDEX].id")
-              HEAD_SHA=$(printf '%s' "$RUNS" | jq -r ".workflow_runs[$INDEX].head_sha")
-              HEAD_BRANCH=$(printf '%s' "$RUNS" | jq -r ".workflow_runs[$INDEX].head_branch")
-
-              RUN_KSU_VERSION=$(calculate_run_ksu_version "$HEAD_SHA" || true)
-              if ! [[ "$RUN_KSU_VERSION" =~ ^[0-9]+$ ]]; then
-                echo "跳过构建 $BUILD_ID: 无法根据提交 $HEAD_SHA 计算 KSU 版本"
-                continue
-              fi
-              if [ "$RUN_KSU_VERSION" -gt "$TARGET_KSU_VERSION" ]; then
-                echo "跳过构建 $BUILD_ID ($HEAD_BRANCH): Manager KSU $RUN_KSU_VERSION 高于内核 KSU $TARGET_KSU_VERSION"
-                continue
-              fi
-
-              ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
-              CANDIDATE_LIST=$(get_manager_artifacts "$ARTIFACTS")
-              if [ -z "$CANDIDATE_LIST" ]; then
-                echo "跳过构建 $BUILD_ID ($HEAD_BRANCH): 未找到包含 '$KSUM' 的产物"
-                continue
-              fi
-
-              if [ -z "$DOWNLOAD_LIST" ] || [ "$RUN_KSU_VERSION" -gt "$BEST_VERSION" ]; then
-                DOWNLOAD_LIST="$CANDIDATE_LIST"
-                BEST_VERSION="$RUN_KSU_VERSION"
-                BEST_BUILD_ID="$BUILD_ID"
-                BEST_BRANCH="$HEAD_BRANCH"
-                echo "候选 Manager: 构建 $BUILD_ID ($HEAD_BRANCH), KSU $RUN_KSU_VERSION"
-              fi
-
-              if [ "$RUN_KSU_VERSION" -eq "$TARGET_KSU_VERSION" ]; then
-                break 2
-              fi
+            echo "正在下载 $V (版本 $best_ver)..."
+            printf '%s\n' "$download_list" | while IFS=$'\t' read -r name url; do
+              [ -n "$name" ] && [ -n "$url" ] || continue
+              local zname="${V}-tmp.zip"
+              curl -sL -H "Authorization: token $GH_TOKEN" -o "$zname" "$url"
+              unzip -qo "$zname" -d "$OUT_DIR"
+              rm -f "$zname"
             done
-          done
 
-          if [ -z "$DOWNLOAD_LIST" ]; then
-            echo "未获取到 KSU 版本小于等于 $TARGET_KSU_VERSION 的 Manager artifact 下载地址列表。"
-            exit 1
-          fi
-          echo "选择 Manager 构建 $BEST_BUILD_ID ($BEST_BRANCH), KSU $BEST_VERSION"
-
-          echo "$DOWNLOAD_LIST" | while IFS=$'\t' read -r NAME URL; do
-            SAFE_NAME=$(echo "$NAME" | tr '/ ' '__')
-            ZIP_NAME="${{ inputs.kernelsu_variant }}-${SAFE_NAME}(${{ env.KSU_VERSION }}).zip"
-            echo "下载 $NAME -> $ZIP_NAME"
-            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -o "$ZIP_NAME" "$URL"
-            mkdir -p "manager-artifacts/$SAFE_NAME"
-            unzip -o "$ZIP_NAME" -d "manager-artifacts/$SAFE_NAME"
-            rm -rf "$ZIP_NAME"
-          done
-
-          if [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
-            echo "仅保留 BakaSU arm64-v8a release 管理器..."
-            find manager-artifacts -type f -name "*.apk" ! -name "*-arm64-v8a-release.apk" -delete
-            find manager-artifacts -type f -name "*debug*.apk" -delete
-            if ! find manager-artifacts -type f -name "*-arm64-v8a-release.apk" | grep -q .; then
-              echo "未找到 BakaSU arm64-v8a release 管理器。"
-              exit 1
+            if [ "$V" == "BakaSU" ]; then
+              find "$OUT_DIR" -type f -name "*.apk" ! -name "*-arm64-v8a-release.apk" -delete
+              find "$OUT_DIR" -type f -name "*debug*.apk" -delete
             fi
-            find manager-artifacts -type f -name "*.apk" -print
+            echo "VER_${V}=$best_ver" >> "$GITHUB_ENV"
+          }
+
+          MODE_PARAM="${{ inputs.kernelsu_variant }}"
+          [ -z "$MODE_PARAM" ] && MODE_PARAM="All"
+
+          if [ "${{ github.event_name }}" == "schedule" ] || [ "$MODE_PARAM" == "All" ]; then
+            echo "执行全量主流变体获取..."
+            for var in Official Next SukiSU BakaSU; do
+              fetch_manager "$var" "manager-artifacts/$var" || true
+            done
+            echo "IS_ALL=true" >> "$GITHUB_ENV"
+          else
+            fetch_manager "$MODE_PARAM" "manager-artifacts"
+            echo "HAS_SINGLE=true" >> "$GITHUB_ENV"
+            echo "SINGLE_ART_NAME=${MODE_PARAM}-Manager(${KSU_VERSION:-20000})" >> "$GITHUB_ENV"
           fi
 
       - name: 检查 SUSFS 上游 Commit
         id: check_susfs_upstream
-        if: inputs.kernelsu_variant != 'SukiSU(40726)' && inputs.kernelsu_variant != 'SukiSU(40548)'
+        if: steps.try_reuse.outputs.reused != 'true'
         run: |
           UPSTREAM_REPO="https://github.com/sidex15/susfs4ksu-module.git"
           UPSTREAM_BRANCH="v1.5.2+"
@@ -322,7 +361,7 @@ jobs:
 
       - name: 恢复 SUSFS 模块缓存
         id: cache_susfs
-        if: inputs.kernelsu_variant != 'SukiSU(40726)' && inputs.kernelsu_variant != 'SukiSU(40548)' && steps.check_susfs_upstream.outputs.upstream_sha != 'unknown'
+        if: steps.try_reuse.outputs.reused != 'true' && steps.check_susfs_upstream.outputs.upstream_sha != 'unknown'
         uses: actions/cache@v4
         with:
           path: susfs-module
@@ -330,27 +369,10 @@ jobs:
 
       - name: 添加 / 构建 SUSFS 模块
         id: add_SUSFS
+        if: steps.try_reuse.outputs.reused != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
-
-          case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU(40726)") LEGACY_RELEASE_TAG="v2.1.0-r2"; LEGACY_SUSFS_VERSION="v2.1.0" ;;
-            "SukiSU(40548)") LEGACY_RELEASE_TAG="v2.0.0-r34"; LEGACY_SUSFS_VERSION="v2.0.0" ;;
-            *) LEGACY_RELEASE_TAG="" ;;
-          esac
-
-          if [ -n "$LEGACY_RELEASE_TAG" ]; then
-            echo "下载 ${{ inputs.kernelsu_variant }} 对应的历史 SUSFS 模块..."
-            mkdir -p susfs-module
-            if ! curl -fL -o susfs-module/ksu_module_susfs.zip \
-              "https://github.com/${{ github.repository }}/releases/download/$LEGACY_RELEASE_TAG/ksu_module_susfs.zip"; then
-              echo "未在当前仓库找到该 Release ($LEGACY_RELEASE_TAG) 的 SUSFS 模块。"
-              exit 1
-            fi
-            echo "SUSFS_NAME=$LEGACY_SUSFS_VERSION" >> "$GITHUB_ENV"
-            exit 0
-          fi
 
           # 检查缓存是否命中且产物完整
           if [ -f "susfs-module/ksu_module_susfs.zip" ]; then
@@ -418,24 +440,49 @@ jobs:
           rm -rf "$SRC_DIR"
           echo "SUSFS_NAME=$SUSFS_NAME" >> "$GITHUB_ENV"
 
-      - name: 提示 SUSFS 模块构建/获取失败
-        if: steps.add_SUSFS.outcome == 'failure'
-        run: echo "::warning::SUSFS 模块构建失败，本次不附带模块 ZIP；不影响 Manager APK 和内核构建。"
-
-      - name: Notify on failure
-        if: steps.add_KSU.outcome == 'failure'
-        run: echo "下载CI构建的KSU失败!"
-
-      - name: 上传APK
-        if: steps.add_KSU.outcome == 'success'
+      # =========================================================================
+      # 产物上传阶段
+      # =========================================================================
+      # 1. 单变体模式上传 (复用成功或单变体现场获取)
+      - name: 上传管理器 APK (单变体)
+        if: env.HAS_SINGLE == 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ inputs.kernelsu_variant }}-Manager(${{ env.KSU_VERSION }})
-          path: |
-            manager-artifacts/**/*.apk
+          name: ${{ env.SINGLE_ART_NAME }}
+          path: manager-artifacts/**/*.apk
 
-      - name: 上传SUSFS模块
-        if: steps.add_SUSFS.outcome == 'success'
+      # 2. 全量模式分别上传各大变体
+      - name: 上传 Official 管理器 APK
+        if: env.IS_ALL == 'true' && hashFiles('manager-artifacts/Official/**/*.apk') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: Official-Manager(${{ env.VER_Official || '20000' }})
+          path: manager-artifacts/Official/**/*.apk
+
+      - name: 上传 Next 管理器 APK
+        if: env.IS_ALL == 'true' && hashFiles('manager-artifacts/Next/**/*.apk') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: Next-Manager(${{ env.VER_Next || '30000' }})
+          path: manager-artifacts/Next/**/*.apk
+
+      - name: 上传 SukiSU 管理器 APK
+        if: env.IS_ALL == 'true' && hashFiles('manager-artifacts/SukiSU/**/*.apk') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: SukiSU-Manager(${{ env.VER_SukiSU || '40000' }})
+          path: manager-artifacts/SukiSU/**/*.apk
+
+      - name: 上传 BakaSU 管理器 APK
+        if: env.IS_ALL == 'true' && hashFiles('manager-artifacts/BakaSU/**/*.apk') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: BakaSU-Manager(${{ env.VER_BakaSU || '30700' }})
+          path: manager-artifacts/BakaSU/**/*.apk
+
+      # 3. 上传 SUSFS 模块
+      - name: 上传 SUSFS 模块
+        if: steps.add_SUSFS.outcome == 'success' || steps.try_reuse.outputs.reused == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: susfs-${{ env.SUSFS_NAME }}
