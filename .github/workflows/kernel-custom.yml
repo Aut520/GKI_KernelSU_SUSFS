@@ -283,6 +283,7 @@ jobs:
       REPO_OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: 验证构建状态
@@ -330,15 +331,22 @@ jobs:
           DATE_STR=$(date -u +'%Y%m%d_%H%M')
 
           if [ -n "$CUSTOM_VER" ]; then
-            RELEASE_TITLE="GKI Kernel: ${CUSTOM_VER} (${KERNEL_FULL}-${PATCH_LEVEL})"
+            BASE_TITLE="GKI Kernel: ${CUSTOM_VER} (${KERNEL_FULL}-${PATCH_LEVEL})"
             TAG_BASE="${CUSTOM_VER}-${KERNEL_FULL}-${PATCH_LEVEL}"
           else
-            RELEASE_TITLE="GKI Kernel: ${KERNEL_FULL}-${PATCH_LEVEL} [${KSU_NAME}]"
+            BASE_TITLE="GKI Kernel: ${KERNEL_FULL}-${PATCH_LEVEL} [${KSU_NAME}]"
             TAG_BASE="${KERNEL_FULL}-${PATCH_LEVEL}-${KSU_NAME}"
           fi
 
           CLEAN_TAG_BASE=$(echo "$TAG_BASE" | tr -d ' ' | tr '()' '-')
-          TAG_NAME="${CLEAN_TAG_BASE}-${DATE_STR}"
+
+          if [ "${{ inputs.release_type }}" == "Pre-Release" ]; then
+            TAG_NAME="${CLEAN_TAG_BASE}-preview-${DATE_STR}"
+            RELEASE_TITLE="${BASE_TITLE} [Pre-Release]"
+          else
+            TAG_NAME="${CLEAN_TAG_BASE}-${DATE_STR}"
+            RELEASE_TITLE="${BASE_TITLE}"
+          fi
 
           echo "RELEASE_TITLE=$RELEASE_TITLE" >> $GITHUB_ENV
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
@@ -455,7 +463,19 @@ jobs:
           echo "准备上传的 Release 附件列表:"
           ls -lh ./release-assets/
 
+      - name: 创建并推送 Git 标签
+        run: |
+          echo "配置 Git 用户信息..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "创建 Git Tag: $TAG_NAME"
+          git tag -f "$TAG_NAME" -m "$RELEASE_TITLE"
+          echo "推送 Tag 到远程仓库: origin $TAG_NAME"
+          git push -f origin "$TAG_NAME"
+
       - name: 创建 GitHub Release 并上传附件
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRERELEASE_FLAG=""
           if [ "${{ inputs.release_type }}" == "Pre-Release" ]; then
@@ -464,16 +484,16 @@ jobs:
 
           echo "创建 Release 标签: $TAG_NAME"
           gh release create "$TAG_NAME" \
+            --repo "${REPO_OWNER}/${REPO_NAME}" \
             --title "$RELEASE_TITLE" \
             --notes-file release_body.md \
-            --target "$GITHUB_SHA" \
             $PRERELEASE_FLAG
 
           echo "正在上传附件到 Release..."
           for asset in ./release-assets/*; do
             [ -f "$asset" ] || continue
             echo "上传: $asset"
-            gh release upload "$TAG_NAME" "$asset" --clobber || true
+            gh release upload "$TAG_NAME" "$asset" --repo "${REPO_OWNER}/${REPO_NAME}" --clobber || true
           done
 
       - name: 发布构建摘要
