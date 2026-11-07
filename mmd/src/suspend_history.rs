@@ -25,9 +25,6 @@
 //! library used in Android uses [libc::CLOCK_BOOTTIME] while the official Rust
 //! standard library implementation uses [libc::CLOCK_MONOTONIC].
 
-// #[cfg(test)]
-// mod tests;
-
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::time::Duration;
@@ -122,7 +119,7 @@ struct Entry {
 ///
 /// In this case, the threshold need to be adjusted by 8 hours (B + C + D).
 ///
-/// ```
+/// ```text
 ///                                                      now
 /// log       : |-A-|     |----B----|   |--C--|   |-D-|   |
 /// threshold :                            |---original---|
@@ -214,5 +211,28 @@ impl SuspendHistory {
 impl Default for SuspendHistory {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_suspend_history_empty() {
+        let history = SuspendHistory::new();
+        let dur = history.calculate_total_suspend_duration(Duration::from_secs(3600), BootTime::from_duration(Duration::from_secs(7200)));
+        assert_eq!(dur, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_record_and_calculate_suspend() {
+        let mut history = SuspendHistory::new();
+        let t1 = BootTime::from_duration(Duration::from_secs(3600));
+        let max_idle = Duration::from_secs(14400);
+
+        history.record_suspend_duration(Duration::from_secs(1800), t1, max_idle);
+        let dur = history.calculate_total_suspend_duration(Duration::from_secs(3600), t1);
+        assert_eq!(dur, Duration::from_secs(1800));
     }
 }

@@ -14,9 +14,6 @@
 
 //! This module provides functions to load zram stats.
 
-// #[cfg(test)]
-// mod tests;
-
 use std::ops::Deref;
 
 use crate::zram::SysfsZramApi;
@@ -151,5 +148,35 @@ impl ZramIoStat {
             invalid_io: parse_next(&mut values)?,
             notify_free: parse_next(&mut values)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::zram::MockSysfsZram;
+
+    #[test]
+    fn test_load_mm_stat() {
+        let mock = MockSysfsZram {
+            mm_stat: "1773445120  461042761  482344960        0  482344960        1        0    33380        0".to_string(),
+            bd_stat: "100 200 300".to_string(),
+            io_stat: "1 2 3 4".to_string(),
+            ..Default::default()
+        };
+        let stat = ZramMmStat::load(&mock).expect("should parse mm_stat");
+        assert_eq!(stat.orig_data_size, 1773445120);
+        assert_eq!(stat.compr_data_size, 461042761);
+        assert_eq!(stat.mem_used_total, 482344960);
+        assert_eq!(stat.same_pages, 1);
+        assert_eq!(stat.huge_pages, Some(33380));
+
+        let bd = ZramBdStat::load(&mock).expect("should parse bd_stat");
+        assert_eq!(bd.bd_count_pages_4k, 100);
+        assert_eq!(bd.bd_writes_pages_4k, 300);
+
+        let io = ZramIoStat::load(&mock).expect("should parse io_stat");
+        assert_eq!(io.failed_reads, 1);
+        assert_eq!(io.notify_free, 4);
     }
 }

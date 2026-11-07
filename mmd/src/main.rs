@@ -196,13 +196,14 @@ fn query_status(ctx: &ZramContext) {
             println!();
 
             println!("[Page Classification & Distribution]");
-            let total_stored_pages = stat.orig_data_size / 4096;
-            let same_mb = (stat.same_pages * 4096) as f64 / (1024.0 * 1024.0);
-            println!("  Total Stored Pages  : {} pages (~{} MiB uncompressed)", total_stored_pages, orig_mb as u64);
+            let page_size = mmd::os::get_page_size() as u64;
+            let total_stored_pages = stat.orig_data_size.checked_div(page_size).unwrap_or(0);
+            let same_mb = (stat.same_pages * page_size) as f64 / (1024.0 * 1024.0);
+            println!("  Total Stored Pages  : {} pages (~{} MiB uncompressed, page size: {} KiB)", total_stored_pages, orig_mb as u64, page_size / 1024);
             println!("  Same Element (Zero) : {} pages ({:.2} MiB saved with 0 byte pool alloc)", stat.same_pages, same_mb);
             if let Some(huge) = stat.huge_pages {
-                let huge_mb = (huge * 4096) as f64 / (1024.0 * 1024.0);
-                println!("  Huge (Incompressible: {} pages ({:.2} MiB stored uncompressed)", huge, huge_mb);
+                let huge_mb = (huge * page_size) as f64 / (1024.0 * 1024.0);
+                println!("  Huge (Incompressible): {} pages ({:.2} MiB stored uncompressed)", huge, huge_mb);
             }
             println!("  Pages Compacted     : {} pages freed by zsmalloc compaction", stat.pages_compacted);
             println!();
@@ -235,11 +236,15 @@ fn query_status(ctx: &ZramContext) {
         println!();
 
         println!("[Kernel Capabilities & Diagnostics]");
-        let precise_idle = std::fs::read_to_string("/sys/kernel/debug/zram/zram0/block_state").is_ok()
-            || std::path::Path::new("/sys/block/zram0/idle").exists();
-        println!("  Idle Aging Support  : {}", if precise_idle { "[YES] /sys/block/zram0/idle available" } else { "[NO]" });
+        let debug_block_state = format!("/sys/kernel/debug/zram/zram{idx}/block_state");
+        let block_idle = format!("/sys/block/zram{idx}/idle");
+        let block_recompress = format!("/sys/block/zram{idx}/recompress");
 
-        let recompress_writable = std::fs::OpenOptions::new().write(true).open("/sys/block/zram0/recompress").is_ok();
+        let precise_idle = std::fs::read_to_string(&debug_block_state).is_ok()
+            || std::path::Path::new(&block_idle).exists();
+        println!("  Idle Aging Support  : {}", if precise_idle { format!("[YES] {} available", block_idle) } else { "[NO]".to_string() });
+
+        let recompress_writable = std::fs::OpenOptions::new().write(true).open(&block_recompress).is_ok();
         println!("  Recompress Sysfs    : {}", if recompress_writable { "[YES] Writable" } else { "[NOTICE] Read-only or requires root" });
 
         if let Some(counts) = count_debug_block_state(idx) {
@@ -302,17 +307,17 @@ fn main() -> anyhow::Result<()> {
         }
         MmdMode::Trigger { force_all } => {
             let uptime_secs = read_uptime_secs().unwrap_or(0);
-            let auto_all = !force_all && (uptime_secs > 0 && uptime_secs < config.min_idle_seconds);
-            let effective_all = force_all || auto_all;
+            let effective_all = force_all;
 
             if force_all {
                 info!("One-shot ZRAM maintenance trigger initiated with --all (force marking all pages as IDLE)...");
-            } else if auto_all {
-                info!(
-                    "System uptime ({}s) is less than min_idle ({}). Automatically marking all pages as IDLE for test trigger...",
-                    uptime_secs, format_duration_human(config.min_idle_seconds)
-                );
             } else {
+                if uptime_secs > 0 && uptime_secs < config.min_idle_seconds {
+                    info!(
+                        "Notice: System uptime ({}s) is less than min_idle ({}). Cold page threshold will be adjusted dynamically.",
+                        uptime_secs, format_duration_human(config.min_idle_seconds)
+                    );
+                }
                 info!(
                     "One-shot ZRAM maintenance trigger initiated (min_idle: {})...",
                     format_duration_human(config.min_idle_seconds)

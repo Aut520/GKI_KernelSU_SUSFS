@@ -18,9 +18,6 @@
 //!
 //! https://docs.kernel.org/admin-guide/blockdev/zram.html#recompression
 
-// #[cfg(test)]
-// mod tests;
-
 use std::time::Duration;
 
 use crate::os::MeminfoApi;
@@ -69,10 +66,18 @@ pub fn get_zram_recompression_status<Z: SysfsZramApi>(
 ) -> std::io::Result<ZramRecompressionStatus> {
     match zram.read_recomp_algorithm() {
         Ok(recomp_algorithm) => {
-            if recomp_algorithm.trim().is_empty() {
+            let trimmed = recomp_algorithm.trim();
+            if trimmed.is_empty() {
                 Ok(ZramRecompressionStatus::NotConfigured)
-            } else {
+            } else if (trimmed.contains('[') && trimmed.contains(']'))
+                || trimmed.contains("algo=")
+                || trimmed.contains("priority=")
+            {
+                // Secondary algorithm is selected/activated (e.g. "[zstd]" or "algo=zstd priority=1")
                 Ok(ZramRecompressionStatus::Activated)
+            } else {
+                // Feature is supported but secondary algorithm is not selected yet
+                Ok(ZramRecompressionStatus::NotConfigured)
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -247,5 +252,34 @@ impl ZramRecompression {
 impl Default for ZramRecompression {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::zram::MockSysfsZram;
+
+    #[test]
+    fn test_recompression_status_detection() {
+        // 1. Bracketed activated algorithm
+        let z1 = MockSysfsZram { recomp_algorithm: "lz4 [zstd] lz4hc".to_string(), ..Default::default() };
+        assert_eq!(get_zram_recompression_status(&z1).unwrap(), ZramRecompressionStatus::Activated);
+
+        // 2. Key-value priority format
+        let z2 = MockSysfsZram { recomp_algorithm: "algo=zstd priority=1\nalgo=lz4hc priority=2".to_string(), ..Default::default() };
+        assert_eq!(get_zram_recompression_status(&z2).unwrap(), ZramRecompressionStatus::Activated);
+
+        // 3. Raw list without brackets (supported by kernel but not configured/activated)
+        let z3 = MockSysfsZram { recomp_algorithm: "lz4 lz4hc zstd".to_string(), ..Default::default() };
+        assert_eq!(get_zram_recompression_status(&z3).unwrap(), ZramRecompressionStatus::NotConfigured);
+
+        // 4. Empty string
+        let z4 = MockSysfsZram { recomp_algorithm: "   \n".to_string(), ..Default::default() };
+        assert_eq!(get_zram_recompression_status(&z4).unwrap(), ZramRecompressionStatus::NotConfigured);
+
+        // 5. File not found
+        let z5 = MockSysfsZram { recomp_algorithm_err: Some(std::io::ErrorKind::NotFound), ..Default::default() };
+        assert_eq!(get_zram_recompression_status(&z5).unwrap(), ZramRecompressionStatus::Unsupported);
     }
 }

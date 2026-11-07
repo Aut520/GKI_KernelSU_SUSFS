@@ -18,9 +18,6 @@
 //!
 //! zram kernel documentation https://docs.kernel.org/admin-guide/blockdev/zram.html
 
-// #[cfg(test)]
-// mod tests;
-
 use std::fs::File;
 use std::fs::Permissions;
 use std::io;

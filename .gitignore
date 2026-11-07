@@ -71,7 +71,6 @@ wild_kernel_comparison.md
 
 # MMD standalone daemon
 mmd/target/
-mmd/Cargo.lock
 mmd/*.ps1
 mmd/*.sh
 mmd/*.bat

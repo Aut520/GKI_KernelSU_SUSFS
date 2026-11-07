@@ -254,6 +254,54 @@ pub fn adjust_writeback_device_size(
 }
 
 #[cfg(test)]
+#[derive(Default)]
+pub struct MockSysfsZram {
+    pub idx: u64,
+    pub disksize: String,
+    pub mm_stat: String,
+    pub comp_algorithm: String,
+    pub backing_dev: String,
+    pub writeback_limit: String,
+    pub compressed_writeback: String,
+    pub bd_stat: String,
+    pub recomp_algorithm: String,
+    pub io_stat: String,
+    pub max_comp_streams: String,
+    pub recomp_algorithm_err: Option<std::io::ErrorKind>,
+}
+
+#[cfg(test)]
+impl SysfsZramApi for MockSysfsZram {
+    fn idx(&self) -> u64 { self.idx }
+    fn read_disksize(&self) -> io::Result<String> { Ok(self.disksize.clone()) }
+    fn write_disksize(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn read_mm_stat(&self) -> io::Result<String> { Ok(self.mm_stat.clone()) }
+    fn read_comp_algorithm(&self) -> io::Result<String> { Ok(self.comp_algorithm.clone()) }
+    fn write_comp_algorithm(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn set_idle(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn read_backing_dev(&self) -> io::Result<String> { Ok(self.backing_dev.clone()) }
+    fn write_backing_dev(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn writeback(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn write_writeback_limit_enable(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn write_writeback_limit(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn read_writeback_limit(&self) -> io::Result<String> { Ok(self.writeback_limit.clone()) }
+    fn write_compressed_writeback(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn read_compressed_writeback(&self) -> io::Result<String> { Ok(self.compressed_writeback.clone()) }
+    fn read_bd_stat(&self) -> io::Result<String> { Ok(self.bd_stat.clone()) }
+    fn read_recomp_algorithm(&self) -> io::Result<String> {
+        if let Some(err) = self.recomp_algorithm_err {
+            Err(io::Error::new(err, "mock error"))
+        } else {
+            Ok(self.recomp_algorithm.clone())
+        }
+    }
+    fn write_recomp_algorithm(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn recompress(&self, _contents: &str) -> io::Result<()> { Ok(()) }
+    fn read_io_stat(&self) -> io::Result<String> { Ok(self.io_stat.clone()) }
+    fn read_max_comp_streams(&self) -> io::Result<String> { Ok(self.max_comp_streams.clone()) }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

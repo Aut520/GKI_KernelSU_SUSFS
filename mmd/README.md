@@ -10,9 +10,13 @@
 | :--- | :--- | :--- |
 | **系统版本要求** | 仅限原生 Android 17+ | **通用全平台** (Android 11~15+ / 任意原生/第三方 ROM) |
 | **框架依赖** | 强依赖 Java `system_server`、JobScheduler、Binder IPC、StatsD | **零框架依赖**，纯 Native 原生进程，彻底脱离 Binder 与 system_server |
-| **体积与资源** | ~数十 MB（含 AIDL/Binder 运行时），占用较大 | **仅 ~400 KB** 单一二进制文件，常驻后台内存 **< 1.5 MB**，CPU **0%** |
+| **体积与资源** | ~数十 MB（含 AIDL/Binder 运行时），占用较大 | **仅约 ~470 KiB** 单一独立静态二进制，常驻后台内存 **VmRSS ~2-3 MB**，极低 CPU 负载 |
 | **触发机制** | 只能等待系统 JobScheduler 在深夜低电量唤醒 | **三模合一**：自主定时守护 + 极轻量 UNIX Socket IPC + CLI 手动/脚本即时触发 |
 | **核心算法保留** | 官方指数衰减冷页插值、休眠时间补偿、精准 Sysfs 追踪 | **100% 忠实保留官方原版算法** (`SuspendMonitor`、`calculate_idle_time` 等) |
+
+> [!IMPORTANT]
+> **运行权限要求**：向 `/sys/block/zram0/idle` 及 `/sys/block/zram0/recompress` 写入指令需要 **Root 权限**。请在 Root 权限下运行守护进程或单次触发维护。
+> **特性说明**：当前独立版聚焦于内核 **Multi-Comp 双流二次重压缩调度（Recompression）**。AOSP 原版的磁盘写回（Writeback）模块在代码中保留为底层驱动原型，目前主流程专注于内存级重压加速。
 
 ---
 
@@ -29,15 +33,21 @@ mmd --status
 # 或简写
 mmd -s
 
-# 单次触发维护：立即计算最佳冷页判定时长，标记 idle，并执行二次重压缩 (Recompression)
+# 单次触发维护：计算最佳冷页判定时长，标记 idle，并执行二次重压缩 (Recompression)
 mmd --trigger
 # 或简写
 mmd -t
 
-# 自主常驻守护模式（后台自主调度 + 监听轻量 Socket）
-mmd --daemon &
+# 强制全量重压：忽略冷页时间判定，强制标记全部页面为 idle 并重压缩（仅建议测试使用）
+mmd -t --all
+
+# 前台常驻守护模式（自主定时调度 + 监听轻量 Socket）
+mmd --daemon
 # 或简写
-mmd -d &
+mmd -d
+
+# 推荐：后台常驻守护模式运行
+nohup mmd -d > /data/local/tmp/mmd.log 2>&1 &
 
 # 通过轻量 Socket 向后台常驻的 mmd 发送即时指令
 mmd --client trigger   # 立即唤起一次重压缩维护

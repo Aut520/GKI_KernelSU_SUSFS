@@ -19,8 +19,6 @@
 //! https://www.kernel.org/doc/Documentation/blockdev/zram.txt
 
 mod history;
-// #[cfg(test)]
-// mod tests;
 
 use std::os::fd::OwnedFd;
 use std::sync::atomic::AtomicBool;
@@ -362,7 +360,7 @@ impl ZramWriteback {
                 if idx == 0 { Some(&mut details) } else { None },
             )?;
 
-            if per_device_params.huge_idle && writeback_limit.is_none_or(|limit| limit > 0) {
+            if per_device_params.huge_idle && writeback_limit.map_or(true, |limit| limit > 0) {
                 writeback_limit = self.writeback::<Z, M>(
                     zram,
                     params,
@@ -373,7 +371,7 @@ impl ZramWriteback {
                     now,
                 )?;
             }
-            if per_device_params.idle && writeback_limit.is_none_or(|limit| limit > 0) {
+            if per_device_params.idle && writeback_limit.map_or(true, |limit| limit > 0) {
                 writeback_limit = self.writeback::<Z, M>(
                     zram,
                     params,
@@ -384,7 +382,7 @@ impl ZramWriteback {
                     now,
                 )?;
             }
-            if per_device_params.huge && writeback_limit.is_none_or(|limit| limit > 0) {
+            if per_device_params.huge && writeback_limit.map_or(true, |limit| limit > 0) {
                 self.writeback::<Z, M>(
                     zram,
                     params,
@@ -471,7 +469,7 @@ impl ZramWriteback {
         let result = zram.writeback(mode);
         let after = ZramBdStat::load(zram).map_err(Error::LoadStatsError)?;
 
-        let written_pages_4k = after.bd_writes_pages_4k - before.bd_writes_pages_4k;
+        let written_pages_4k = after.bd_writes_pages_4k.saturating_sub(before.bd_writes_pages_4k);
         details.written_pages_4k += written_pages_4k;
         self.history.record(details.written_pages_4k, now);
 

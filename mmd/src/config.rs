@@ -1,6 +1,6 @@
 // Standalone mmd configuration with rich CLI and Environment parsing
 use std::time::Duration;
-use log::LevelFilter;
+use log::{warn, LevelFilter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MmdMode {
@@ -55,8 +55,8 @@ impl Default for MmdConfig {
     }
 }
 
-/// Parse time string into seconds, supporting units: s (seconds), m (minutes), h (hours), d (days)
-/// Example: "1800", "30m", "1h", "2h", "4h"
+/// Parse time string into seconds, supporting units: s, m, h, d, as well as Chinese units (秒/分/小时/天)
+/// Example: "1800", "30m", "1h", "2h", "4h", "1小时", "30 分"
 pub fn parse_duration_to_seconds(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if s.is_empty() {
@@ -65,17 +65,40 @@ pub fn parse_duration_to_seconds(s: &str) -> Result<u64, String> {
     if let Ok(num) = s.parse::<u64>() {
         return Ok(num);
     }
-    let (num_str, unit) = s.split_at(s.len() - 1);
-    let num: u64 = num_str.parse().map_err(|_| format!("Invalid number in duration: '{s}'"))?;
-    match unit.to_ascii_lowercase().as_str() {
-        "s" => Ok(num),
-        "m" => Ok(num * 60),
-        "h" => Ok(num * 3600),
-        "d" => Ok(num * 86400),
-        _ => Err(format!("Unknown duration unit in '{s}'. Supported: s, m, h, d (or raw seconds)")),
+
+    // Safely find the boundary between leading ASCII digits and the unit without byte indexing panics
+    let mut num_end = 0;
+    for (idx, c) in s.char_indices() {
+        if c.is_ascii_digit() {
+            num_end = idx + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if num_end == 0 {
+        return Err(format!("No leading number found in duration: '{s}'"));
+    }
+
+    let num_str = &s[..num_end];
+    let unit_str = s[num_end..].trim();
+
+    let num: u64 = num_str
+        .parse()
+        .map_err(|_| format!("Invalid number in duration: '{s}'"))?;
+
+    match unit_str.to_ascii_lowercase().as_str() {
+        "s" | "sec" | "secs" | "second" | "seconds" | "秒" => Ok(num),
+        "m" | "min" | "mins" | "minute" | "minutes" | "分" | "分钟" => Ok(num * 60),
+        "h" | "hr" | "hrs" | "hour" | "hours" | "时" | "小时" => Ok(num * 3600),
+        "d" | "day" | "days" | "天" => Ok(num * 86400),
+        _ => Err(format!(
+            "Unknown duration unit in '{s}'. Supported: s, m, h, d (or raw seconds)"
+        )),
     }
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 pub fn format_duration_human(secs: u64) -> String {
     if secs >= 86400 && secs % 86400 == 0 {
         format!("{}s ({}d)", secs, secs / 86400)
@@ -99,19 +122,34 @@ impl MmdConfig {
 
         // 1. Overlay Environment Variables
         if let Ok(v) = std::env::var("MMD_INTERVAL") {
-            if let Ok(num) = parse_duration_to_seconds(&v) { cfg.interval_seconds = num; }
+            match parse_duration_to_seconds(&v) {
+                Ok(num) => cfg.interval_seconds = num,
+                Err(e) => warn!("Invalid MMD_INTERVAL='{v}': {e}, using default {}s", cfg.interval_seconds),
+            }
         }
         if let Ok(v) = std::env::var("MMD_MIN_IDLE") {
-            if let Ok(num) = parse_duration_to_seconds(&v) { cfg.min_idle_seconds = num; }
+            match parse_duration_to_seconds(&v) {
+                Ok(num) => cfg.min_idle_seconds = num,
+                Err(e) => warn!("Invalid MMD_MIN_IDLE='{v}': {e}, using default {}s", cfg.min_idle_seconds),
+            }
         }
         if let Ok(v) = std::env::var("MMD_MAX_IDLE") {
-            if let Ok(num) = parse_duration_to_seconds(&v) { cfg.max_idle_seconds = num; }
+            match parse_duration_to_seconds(&v) {
+                Ok(num) => cfg.max_idle_seconds = num,
+                Err(e) => warn!("Invalid MMD_MAX_IDLE='{v}': {e}, using default {}s", cfg.max_idle_seconds),
+            }
         }
         if let Ok(v) = std::env::var("MMD_BACKOFF") {
-            if let Ok(num) = parse_duration_to_seconds(&v) { cfg.backoff_seconds = num; }
+            match parse_duration_to_seconds(&v) {
+                Ok(num) => cfg.backoff_seconds = num,
+                Err(e) => warn!("Invalid MMD_BACKOFF='{v}': {e}, using default {}s", cfg.backoff_seconds),
+            }
         }
         if let Ok(v) = std::env::var("MMD_THRESHOLD") {
-            if let Ok(num) = v.parse() { cfg.threshold_bytes = num; }
+            match v.parse() {
+                Ok(num) => cfg.threshold_bytes = num,
+                Err(e) => warn!("Invalid MMD_THRESHOLD='{v}': {e}, using default {}B", cfg.threshold_bytes),
+            }
         }
         if let Ok(v) = std::env::var("MMD_SOCKET") {
             cfg.socket_path = v;
@@ -263,5 +301,33 @@ impl MmdConfig {
             huge: self.huge,
             threshold_bytes: self.threshold_bytes,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration_ascii_and_chinese() {
+        assert_eq!(parse_duration_to_seconds("1800"), Ok(1800));
+        assert_eq!(parse_duration_to_seconds("30s"), Ok(30));
+        assert_eq!(parse_duration_to_seconds("30m"), Ok(1800));
+        assert_eq!(parse_duration_to_seconds("2h"), Ok(7200));
+        assert_eq!(parse_duration_to_seconds("1d"), Ok(86400));
+        assert_eq!(parse_duration_to_seconds("1小时"), Ok(3600));
+        assert_eq!(parse_duration_to_seconds("30 分"), Ok(1800));
+        assert_eq!(parse_duration_to_seconds("45秒"), Ok(45));
+        assert_eq!(parse_duration_to_seconds("2天"), Ok(172800));
+    }
+
+    #[test]
+    fn test_parse_duration_invalid_no_panic() {
+        assert!(parse_duration_to_seconds("").is_err());
+        assert!(parse_duration_to_seconds("   ").is_err());
+        assert!(parse_duration_to_seconds("小时").is_err());
+        assert!(parse_duration_to_seconds("秒").is_err());
+        assert!(parse_duration_to_seconds("abc").is_err());
+        assert!(parse_duration_to_seconds("12x").is_err());
     }
 }

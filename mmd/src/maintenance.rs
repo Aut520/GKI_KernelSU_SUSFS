@@ -55,7 +55,18 @@ pub struct MaintenanceSummary {
 
 impl ZramContext {
     pub fn new(num_devices: u64) -> Self {
-        let zram_devices: Vec<_> = (0..num_devices).map(SysfsZramApiImpl::new).collect();
+        let mut zram_devices = Vec::new();
+        for idx in 0..num_devices {
+            let path = format!("/sys/block/zram{idx}");
+            if std::path::Path::new(&path).exists() {
+                zram_devices.push(SysfsZramApiImpl::new(idx));
+            } else if idx == 0 {
+                // Keep zram0 as base device instance even if unmounted in tests
+                zram_devices.push(SysfsZramApiImpl::new(idx));
+            } else {
+                warn!("ZRAM device {path} does not exist, skipping");
+            }
+        }
 
         let do_recompression: std::io::Result<_> = zram_devices.iter().try_fold(false, |acc, zram| {
             Ok(acc || (get_zram_recompression_status(zram)? == ZramRecompressionStatus::Activated))
@@ -155,35 +166,42 @@ impl ZramContext {
                     Ok(_) => {
                         info!("ZRAM recompression successfully executed for all idle pages on zram{}", zram.idx());
                         summary.recompress_success = true;
-                        summary.status_message = "Full recompression (all pages) succeeded".to_string();
+                        summary.status_message = format!("Full recompression on zram{} succeeded", zram.idx());
                     }
                     Err(e) => {
                         error!("Failed to execute ZRAM recompression on zram{}: {e:?}", zram.idx());
-                        summary.status_message = format!("Error: {e:?}");
+                        summary.status_message = format!("Error on zram{}: {e:?}", zram.idx());
                     }
                 }
                 maintenance_active = true;
             }
         } else if let Some(recompression) = self.zram_recompression.as_mut() {
+            let mut device_messages = Vec::new();
+            let mut any_success = false;
             for zram in self.zram_devices.iter() {
+                let mut dev_summary = MaintenanceSummary::default();
                 let ok = Self::execute_recompression(
                     zram,
                     recompression,
                     &recompression_params,
                     &self.suspend_history,
                     self.idle_marker.as_idle_marker(),
-                    &mut summary,
+                    &mut dev_summary,
                 );
-                if !ok {
-                    refresh_idle_pages = false;
+                if ok {
+                    any_success = true;
+                    summary.recompress_success = true;
                 }
+                device_messages.push(format!("zram{}: {}", zram.idx(), dev_summary.status_message));
                 maintenance_active = true;
             }
+            summary.status_message = device_messages.join(" | ");
+            refresh_idle_pages = any_success;
         } else {
             summary.status_message = "Recompression is not configured on zram devices".to_string();
         }
 
-        // Untracked marker fallback refresh
+        // Untracked marker fallback refresh: only refresh baseline when recompression actually happened
         if refresh_idle_pages && maintenance_active {
             if let ZramIdleMarker::Untracked(marker) = &mut self.idle_marker {
                 for zram in self.zram_devices.iter() {
@@ -231,33 +249,38 @@ impl ZramContext {
                 true
             }
             Err(ZramRecompressionError::BackoffTime) => {
-                info!("ZRAM recompression skipped due to backoff time window");
+                info!("ZRAM recompression skipped due to backoff time window on zram{}", zram.idx());
                 summary.status_message = "Skipped: within backoff window".to_string();
                 false
             }
             Err(ZramRecompressionError::TryMarkIdleAgain) => {
-                info!("ZRAM idle pages not ready yet; will try next maintenance cycle");
+                info!("ZRAM idle pages not ready yet on zram{}; will try next cycle", zram.idx());
                 summary.status_message = "Idle pages not ready".to_string();
                 false
             }
             Err(e) => {
-                error!("Failed to execute zram recompression: {e:?}");
+                error!("Failed to execute zram recompression on zram{}: {e:?}", zram.idx());
                 summary.status_message = format!("Error: {e:?}");
-                true
+                false
             }
         }
     }
 }
 
-/// Checks whether the kernel supports precise idle aging by writing to /sys/block/zram0/idle
+/// Checks safely without side-effects whether the kernel supports precise idle aging (CONFIG_ZRAM_MEMORY_TRACKING)
 fn is_idle_aging_supported(zram: &SysfsZramApiImpl) -> std::io::Result<bool> {
-    if let Err(e) = zram.set_idle(&u32::MAX.to_string()) {
-        if e.kind() == std::io::ErrorKind::InvalidInput {
-            Ok(false)
-        } else {
-            Err(e)
-        }
-    } else {
-        Ok(true)
+    // Check if debugfs block_state exists (the golden standard for CONFIG_ZRAM_MEMORY_TRACKING)
+    let debug_block_state = format!("/sys/kernel/debug/zram/zram{}/block_state", zram.idx());
+    if std::path::Path::new(&debug_block_state).exists() {
+        return Ok(true);
     }
+
+    // Check if sysfs idle exists
+    let idle_path = format!("/sys/block/zram{}/idle", zram.idx());
+    if !std::path::Path::new(&idle_path).exists() {
+        return Ok(false);
+    }
+
+    // If block_state is restricted or unavailable, default safely to Untracked to avoid side-effects
+    Ok(false)
 }

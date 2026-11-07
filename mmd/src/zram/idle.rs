@@ -14,9 +14,6 @@
 
 //! This module provides the interface for CONFIG_ZRAM_MEMORY_TRACKING feature.
 
-// #[cfg(test)]
-// mod tests;
-
 use std::error::Error;
 use std::marker::PhantomData;
 use std::time::Duration;
@@ -196,4 +193,32 @@ pub fn calculate_idle_time<M: MeminfoApi>(
         + (min_idle.as_secs() as f64);
 
     Ok(Duration::from_secs(seconds as u64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockMeminfo;
+
+    impl MeminfoApi for MockMeminfo {
+        fn read_meminfo() -> std::io::Result<String> {
+            Ok("MemTotal:       16384000 kB\nMemFree:         4096000 kB\nMemAvailable:    8192000 kB\n".to_string())
+        }
+    }
+
+    #[test]
+    fn test_parse_meminfo() {
+        let content = "MemTotal:       16384000 kB\nMemFree:         4096000 kB\nMemAvailable:    8192000 kB\n";
+        let parsed = parse_meminfo(content);
+        assert_eq!(parsed, Some((16384000, 8192000)));
+    }
+
+    #[test]
+    fn test_calculate_idle_time() {
+        let min_idle = Duration::from_secs(7200);
+        let max_idle = Duration::from_secs(14400);
+        let idle_time = calculate_idle_time::<MockMeminfo>(min_idle, max_idle).unwrap();
+        assert!(idle_time >= min_idle && idle_time <= max_idle);
+    }
 }
