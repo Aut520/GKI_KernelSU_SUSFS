@@ -338,7 +338,10 @@ jobs:
             TAG_BASE="${KERNEL_FULL}-${PATCH_LEVEL}-${KSU_NAME}"
           fi
 
-          CLEAN_TAG_BASE=$(echo "$TAG_BASE" | tr -d ' ' | tr '()' '-')
+          CLEAN_TAG_BASE=$(echo "$TAG_BASE" | sed -E 's/[^a-zA-Z0-9._-]+/-/g; s/^[-.]+//; s/[-.]+$//; s/-+/-/g')
+          if [ -z "$CLEAN_TAG_BASE" ]; then
+            CLEAN_TAG_BASE="${KERNEL_FULL}-${PATCH_LEVEL}-${KSU_NAME}"
+          fi
 
           if [ "${{ inputs.release_type }}" == "Pre-Release" ]; then
             TAG_NAME="${CLEAN_TAG_BASE}-preview-${DATE_STR}"
@@ -469,9 +472,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           echo "创建 Git Tag: $TAG_NAME"
-          git tag -f "$TAG_NAME" -m "$RELEASE_TITLE"
-          echo "推送 Tag 到远程仓库: origin $TAG_NAME"
-          git push -f origin "$TAG_NAME"
+          git tag -f -a -m "$RELEASE_TITLE" -- "$TAG_NAME"
+          echo "推送 Tag 到远程仓库: origin refs/tags/$TAG_NAME"
+          git push -f origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
 
       - name: 创建 GitHub Release 并上传附件
         env:
