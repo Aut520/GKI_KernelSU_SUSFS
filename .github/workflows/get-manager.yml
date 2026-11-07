@@ -388,28 +388,27 @@ jobs:
 
           # 打包模块（使用 Python 打包避免 cd 且保留 755 文件权限）
           mkdir -p susfs-module
-          python3 -c "
-          import os, zipfile
-          src = '$SRC_DIR'
-          out = 'susfs-module/ksu_module_susfs.zip'
-          exclude_prefixes = ('.git', '.github', 'node_modules', 'src', 'tests')
-          exclude_files = {'README.md', 'LICENSE'}
-          with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
-              for root, _, files in os.walk(src):
-                  rel_dir = os.path.relpath(root, src)
-                  if rel_dir != '.' and any(rel_dir.startswith(p) for p in exclude_prefixes):
-                      continue
-                  for f in files:
-                      if rel_dir == '.' and f in exclude_files:
+          python3 -c "import textwrap; exec(textwrap.dedent('''
+              import os, sys, zipfile
+              src, out = sys.argv[1], sys.argv[2]
+              exclude_prefixes = ('.git', '.github', 'node_modules', 'src', 'tests')
+              exclude_files = {'README.md', 'LICENSE'}
+              with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+                  for root, _, files in os.walk(src):
+                      rel_dir = os.path.relpath(root, src)
+                      if rel_dir != '.' and any(rel_dir.startswith(p) for p in exclude_prefixes):
                           continue
-                      full_path = os.path.join(root, f)
-                      arcname = os.path.relpath(full_path, src)
-                      st = os.stat(full_path)
-                      zi = zipfile.ZipInfo.from_file(full_path, arcname)
-                      zi.external_attr = (st.st_mode & 0xFFFF) << 16
-                      with open(full_path, 'rb') as fp:
-                          z.writestr(zi, fp.read())
-          "
+                      for f in files:
+                          if rel_dir == '.' and f in exclude_files:
+                              continue
+                          full_path = os.path.join(root, f)
+                          arcname = os.path.relpath(full_path, src)
+                          st = os.stat(full_path)
+                          zi = zipfile.ZipInfo.from_file(full_path, arcname)
+                          zi.external_attr = (st.st_mode & 0xFFFF) << 16
+                          with open(full_path, 'rb') as fp:
+                              z.writestr(zi, fp.read())
+          '''))" "$SRC_DIR" "susfs-module/ksu_module_susfs.zip"
 
           # 严格校验产物完整性
           if [ ! -f "susfs-module/ksu_module_susfs.zip" ]; then

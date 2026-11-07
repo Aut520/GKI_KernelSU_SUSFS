@@ -420,21 +420,20 @@ jobs:
             if [ -f "$d/anykernel.sh" ] && ! find "$d" -maxdepth 1 -name "*.zip" | grep -q .; then
               ZIP_NAME="${KERNEL_FULL}-${PATCH_LEVEL}-AnyKernel3.zip"
               echo "打包 AnyKernel3 目录为 $ZIP_NAME..."
-              python3 -c "
-              import os, zipfile
-              src = '$d'
-              out = './release-assets/$ZIP_NAME'
-              with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
-                  for root, _, files in os.walk(src):
-                      for file in files:
-                          full = os.path.join(root, file)
-                          arc = os.path.relpath(full, src)
-                          st = os.stat(full)
-                          zi = zipfile.ZipInfo.from_file(full, arc)
-                          zi.external_attr = (st.st_mode & 0xFFFF) << 16
-                          with open(full, 'rb') as fp:
-                              z.writestr(zi, fp.read())
-              "
+              python3 -c "import textwrap; exec(textwrap.dedent('''
+                  import os, sys, zipfile
+                  src, out = sys.argv[1], sys.argv[2]
+                  with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+                      for root, _, files in os.walk(src):
+                          for file in files:
+                              full = os.path.join(root, file)
+                              arc = os.path.relpath(full, src)
+                              st = os.stat(full)
+                              zi = zipfile.ZipInfo.from_file(full, arc)
+                              zi.external_attr = (st.st_mode & 0xFFFF) << 16
+                              with open(full, 'rb') as fp:
+                                  z.writestr(zi, fp.read())
+              '''))" "$d" "./release-assets/$ZIP_NAME"
             fi
           done
 
