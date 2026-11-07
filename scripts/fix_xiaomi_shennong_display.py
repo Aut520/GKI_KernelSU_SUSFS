@@ -9,6 +9,7 @@
 4. 恢复被 Google 删除的 pm_domain 与 cpufreq Vendor Hooks 声明、导出及实际调用点
 5. 修复 CPU Idle 定时器唤醒防护，防止 VSYNC 抖动与背光平滑插值微闪
 6. 还原 gki_defconfig 中 KABI task_struct 结构体配置
+7. 自动修复 Linux 6.1.182+ LTS 内核 PM 休眠死锁缺陷 (complete -> complete_all，根除熄屏无法点亮与 AOD 失效)
 """
 
 import sys
