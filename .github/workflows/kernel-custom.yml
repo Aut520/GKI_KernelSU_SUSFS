@@ -67,6 +67,15 @@ on:
           - "仅上传 AnyKernel3.zip"
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
+      release_type:
+        description: "发布到 GitHub Releases"
+        required: true
+        type: choice
+        options:
+          - "不上传"
+          - "Release"
+          - "Pre-Release"
+        default: "不上传"
 
       # ==================== 文本输入 ====================
       os_patch_level:
@@ -252,3 +261,185 @@ jobs:
     secrets: inherit
     with:
       kernelsu_variant: ${{ inputs.kernelsu_variant }}
+
+  release:
+    name: 发布 GitHub Release
+    if: ${{ always() && !cancelled() && inputs.release_type != '不上传' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    needs:
+      - resolve-version
+      - get-ksu-manager
+      - build-custom-kernel
+
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: 验证构建状态
+        run: |
+          if [ "${{ needs.build-custom-kernel.result }}" != "success" ]; then
+            echo "::error::内核构建未成功完成 (结果: ${{ needs.build-custom-kernel.result }})，跳过 Release 发布"
+            exit 1
+          fi
+
+      - name: 检出仓库代码
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: 设置发布信息与环境变量
+        run: |
+          ANDROID_VER="${{ needs.resolve-version.outputs.android_version }}"
+          KERNEL_FULL="${{ needs.resolve-version.outputs.kernel_full }}"
+          PATCH_LEVEL="${{ inputs.os_patch_level }}"
+          KSU_VARIANT="${{ inputs.kernelsu_variant }}"
+
+          case "$KSU_VARIANT" in
+            "Next")      KSU_NAME="KernelSU-Next" ;;
+            "Official")  KSU_NAME="KernelSU" ;;
+            "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") KSU_NAME="SukiSU" ;;
+            "BakaSU")    KSU_NAME="BakaSU" ;;
+            *)           KSU_NAME="$KSU_VARIANT" ;;
+          esac
+
+          ZRAM_STR="${{ inputs.use_zram && '开启' || '未开启' }}"
+          BBG_STR="${{ inputs.use_bbg && '支持' || '不支持' }}"
+          NET_STR="${{ inputs.use_networking && '开启' || '未开启' }}"
+          NOMOUNT_STR="${{ inputs.use_nomount && '开启' || '未开启' }}"
+          MI14P_STR="${{ inputs.fix_mi14p_flicker && '已启用' || '未启用' }}"
+
+          if [[ "${{ inputs.use_kpm }}" == enabled* ]]; then
+            KPM_STR="支持"
+          elif [[ "${{ inputs.use_kpm }}" == patched* ]]; then
+            KPM_STR="支持（补丁尚不支持）"
+          else
+            KPM_STR="未开启"
+          fi
+
+          CUSTOM_VER="${{ inputs.version }}"
+          DATE_STR=$(date -u +'%Y%m%d_%H%M')
+
+          if [ -n "$CUSTOM_VER" ]; then
+            RELEASE_TITLE="GKI Kernel: ${CUSTOM_VER} (${KERNEL_FULL}-${PATCH_LEVEL})"
+            TAG_BASE="${CUSTOM_VER}-${KERNEL_FULL}-${PATCH_LEVEL}"
+          else
+            RELEASE_TITLE="GKI Kernel: ${KERNEL_FULL}-${PATCH_LEVEL} [${KSU_NAME}]"
+            TAG_BASE="${KERNEL_FULL}-${PATCH_LEVEL}-${KSU_NAME}"
+          fi
+
+          CLEAN_TAG_BASE=$(echo "$TAG_BASE" | tr -d ' ' | tr '()' '-')
+          TAG_NAME="${CLEAN_TAG_BASE}-${DATE_STR}"
+
+          echo "RELEASE_TITLE=$RELEASE_TITLE" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "KSU_NAME=$KSU_NAME" >> $GITHUB_ENV
+          echo "KERNEL_FULL=$KERNEL_FULL" >> $GITHUB_ENV
+          echo "PATCH_LEVEL=$PATCH_LEVEL" >> $GITHUB_ENV
+          echo "ZRAM_STR=$ZRAM_STR" >> $GITHUB_ENV
+          echo "BBG_STR=$BBG_STR" >> $GITHUB_ENV
+          echo "NET_STR=$NET_STR" >> $GITHUB_ENV
+          echo "NOMOUNT_STR=$NOMOUNT_STR" >> $GITHUB_ENV
+          echo "MI14P_STR=$MI14P_STR" >> $GITHUB_ENV
+          echo "KPM_STR=$KPM_STR" >> $GITHUB_ENV
+
+      - name: 生成 Release 说明
+        run: |
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+          cat > release_body.md << EOF
+          ## GKI Custom Kernel Release
+
+          **内核版本**: \`${KERNEL_FULL}\` (${PATCH_LEVEL})
+          **集成变体**: \`${KSU_NAME}\` (模式: ${{ inputs.ksu_mode }})
+
+          | 项目 | 内容 |
+          |:---|:---|
+          | 发布类型 | ${{ inputs.release_type }} |
+          | 构建时间 | $BUILD_DATE |
+          | 安全补丁级别 | ${PATCH_LEVEL} |
+          | AnyKernel3 刷机包 | 见下方 Assets 附件 |
+
+          ### 功能特性
+
+          | 功能特性 | 状态 |
+          |:---|:---|
+          | KernelSU 变体 | ${KSU_NAME} |
+          | KernelSU / SUSFS 模式 | ${{ inputs.ksu_mode }} |
+          | ZRAM / LZ4 压缩增强 | ${ZRAM_STR} |
+          | BBG 防格机保护 | ${BBG_STR} |
+          | 网络增强 (BBRv3 / IPSet / CIFS) | ${NET_STR} |
+          | NoMount 挂载模块 | ${NOMOUNT_STR} |
+          | KPM 功能 | ${KPM_STR} |
+          | 小米14Pro 屏幕/驱动修复 | ${MI14P_STR} |
+
+          ### 刷入与安全提示
+
+          > [!IMPORTANT]
+          > 1. 刷入内核前**务必在 TWRP / Recovery 或系统中备份原厂 Boot 镜像**。
+          > 2. 请根据你的机型及需求选择刷入 AnyKernel3 刷机包或提取 boot 镜像。
+          > 3. 若遇到任何启动异常，请第一时间刷回官方 Boot 镜像恢复。
+
+          EOF
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v8
+        with:
+          path: ./downloaded-artifacts
+
+      - name: 整理发布附件
+        run: |
+          mkdir -p ./release-assets
+
+          # 1. 处理 AnyKernel3 与镜像产物
+          for d in ./downloaded-artifacts/*_kernel-*; do
+            [ -d "$d" ] || continue
+            [[ "$d" == *-Rejects* ]] && continue
+
+            find "$d" -maxdepth 1 -type f \( -name "*.zip" -o -name "*.img" \) -exec cp -t ./release-assets/ {} +
+
+            if [ -f "$d/anykernel.sh" ] && ! find "$d" -maxdepth 1 -name "*.zip" | grep -q .; then
+              ZIP_NAME="${KERNEL_FULL}-${PATCH_LEVEL}-AnyKernel3.zip"
+              echo "打包 AnyKernel3 目录为 $ZIP_NAME..."
+              (cd "$d" && zip -r "../../release-assets/$ZIP_NAME" ./*)
+            fi
+          done
+
+          # 2. 复制管理器 APK 与 SUSFS 模块（若有）
+          find ./downloaded-artifacts -type f -name "*.apk" -exec cp -t ./release-assets/ {} +
+          find ./downloaded-artifacts -type f -path "./downloaded-artifacts/susfs-*/*" -exec cp -t ./release-assets/ {} +
+
+          echo "准备上传的 Release 附件列表:"
+          ls -lh ./release-assets/
+
+      - name: 创建 GitHub Release 并上传附件
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ inputs.release_type }}" == "Pre-Release" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          echo "创建 Release 标签: $TAG_NAME"
+          gh release create "$TAG_NAME" \
+            --title "$RELEASE_TITLE" \
+            --notes-file release_body.md \
+            --target "$GITHUB_SHA" \
+            $PRERELEASE_FLAG
+
+          echo "正在上传附件到 Release..."
+          for asset in ./release-assets/*; do
+            [ -f "$asset" ] || continue
+            echo "上传: $asset"
+            gh release upload "$TAG_NAME" "$asset" --clobber || true
+          done
+
+      - name: 发布构建摘要
+        run: |
+          echo "## 🚀 GitHub Release 发布成功" >> $GITHUB_STEP_SUMMARY
+          echo "- **标签**: \`$TAG_NAME\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **标题**: $RELEASE_TITLE" >> $GITHUB_STEP_SUMMARY
+          echo "- **类型**: ${{ inputs.release_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **链接**: https://github.com/$REPO_OWNER/$REPO_NAME/releases/tag/$TAG_NAME" >> $GITHUB_STEP_SUMMARY

@@ -372,6 +372,57 @@ def fix_cpufreq_vendor_hooks(kernel_root):
     except Exception as e:
         log(f"[WARN] 恢复 cpufreq 钩子时发生异常: {e}")
 
+def fix_pm_sleep_completion(kernel_root):
+    """
+    修复 Linux 6.1.182+ LTS 引入的 PM 设备休眠完成量死锁缺陷
+    (commit 2fe7ebb3d50c8: complete() 导致 Token 耗尽死锁，上游已紧急 Revert afb942a5c521 但 Google LTS 尚未合入)
+    将 complete(&dev->power.completion) 还原为 complete_all(&dev->power.completion)，
+    避免熄屏后无法唤醒和 AOD 冻结。
+    """
+    target = os.path.join(kernel_root, "drivers/base/power/main.c")
+    if not os.path.isfile(target):
+        return
+
+    try:
+        with open(target, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+
+        changed = False
+        # 1. 还原 device_pm_sleep_init 中的 complete_all
+        if "init_completion(&dev->power.completion);" in content and "complete(&dev->power.completion);" in content:
+            content = content.replace(
+                "init_completion(&dev->power.completion);\n\tcomplete(&dev->power.completion);",
+                "init_completion(&dev->power.completion);\n\tcomplete_all(&dev->power.completion);"
+            )
+            changed = True
+            log("[OK] 已还原 device_pm_sleep_init 为 complete_all (修复熄屏休眠死锁与 AOD 无反应)")
+
+        # 2. 移除 dpm_wait 中为配合 complete 引入的多余 no_pm 特判 (对齐上游 Revert 提交 afb942a5c521)
+        if "/* Devices with no PM support don't use the completion. */\n\tif (dev->power.no_pm)\n\t\treturn;\n" in content:
+            content = content.replace(
+                "\t/* Devices with no PM support don't use the completion. */\n\tif (dev->power.no_pm)\n\t\treturn;\n\n",
+                ""
+            )
+            changed = True
+            log("[OK] 已清理 dpm_wait 中 no_pm 特判 (对齐 Linux 官方 Revert 补丁)")
+
+        # 3. 还原 __device_suspend_late 中的 pm_runtime_disable 行为
+        if "\tpm_runtime_disable(dev);\n\n\tdpm_wait_for_subordinate(dev, async);" in content:
+            content = content.replace(
+                "\tpm_runtime_disable(dev);\n\n\tdpm_wait_for_subordinate(dev, async);",
+                "\t__pm_runtime_disable(dev, false);\n\n\tdpm_wait_for_subordinate(dev, async);"
+            )
+            changed = True
+            log("[OK] 已还原 __device_suspend_late 为 __pm_runtime_disable(dev, false) (避免打乱 GDSC 电源域时序)")
+
+        if changed:
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            log("[INFO] drivers/base/power/main.c 无需修补或已为安全状态")
+    except Exception as e:
+        log(f"[WARN] 修复 PM Sleep Completion 时发生异常: {e}")
+
 def fix_gki_defconfig(kernel_root):
     defconfig = os.path.join(kernel_root, "arch/arm64/configs/gki_defconfig")
     if not os.path.isfile(defconfig):
@@ -452,13 +503,14 @@ def main():
 
     log(f"[OK] 当前内核版本为 {target_version_str} (满足 6.1 > 140)，直接放行，开始应用完整修复...")
 
-    # 4. 执行全系统级 5 大关键补丁群修复
+    # 4. 执行全系统级关键补丁群修复
     fix_dpu_encoder_phys_cmd(kernel_root)
     fix_drm_atomic_helper(kernel_root)
     fix_drm_fourcc(kernel_root)
     fix_pm_domain_vendor_hooks(kernel_root)
     fix_cpufreq_vendor_hooks(kernel_root)
     fix_cpu_idle_tick(kernel_root)
+    fix_pm_sleep_completion(kernel_root)
     fix_gki_defconfig(kernel_root)
 
     log(f"[DONE] 小米 14 Pro ({target_version_str}) 驱动补全与屏幕闪烁修复全部处理完成！")
