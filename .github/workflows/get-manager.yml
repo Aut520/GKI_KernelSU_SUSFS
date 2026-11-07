@@ -152,13 +152,7 @@ jobs:
               jq -r '.assets[] | select(.name | startswith("SukiSU_") and endswith("-release.apk")) | .browser_download_url' |
               head -n 1 || true)
             if [ -z "$MANAGER_URL" ]; then
-              echo "当前仓库未检测到该 Release，回退至上游仓库拉取..."
-              MANAGER_URL=$(curl -fsSL "https://api.github.com/repos/zzh20188/GKI_KernelSU_SUSFS/releases/tags/$LEGACY_RELEASE_TAG" |
-                jq -r '.assets[] | select(.name | startswith("SukiSU_") and endswith("-release.apk")) | .browser_download_url' |
-                head -n 1)
-            fi
-            if [ -z "$MANAGER_URL" ]; then
-              echo "未找到 ${{ inputs.kernelsu_variant }} 管理器下载地址。"
+              echo "未在当前仓库找到 ${{ inputs.kernelsu_variant }} 管理器 Release 资产。"
               exit 1
             fi
             curl -fL -o "manager-artifacts/$LEGACY_DIR/${LEGACY_DIR}-release.apk" "$MANAGER_URL"
@@ -351,9 +345,8 @@ jobs:
             mkdir -p susfs-module
             if ! curl -fL -o susfs-module/ksu_module_susfs.zip \
               "https://github.com/${{ github.repository }}/releases/download/$LEGACY_RELEASE_TAG/ksu_module_susfs.zip"; then
-              echo "当前仓库未找到模块，回退至上游仓库拉取..."
-              curl -fL -o susfs-module/ksu_module_susfs.zip \
-                "https://github.com/zzh20188/GKI_KernelSU_SUSFS/releases/download/$LEGACY_RELEASE_TAG/ksu_module_susfs.zip"
+              echo "未在当前仓库找到该 Release ($LEGACY_RELEASE_TAG) 的 SUSFS 模块。"
+              exit 1
             fi
             echo "SUSFS_NAME=$LEGACY_SUSFS_VERSION" >> "$GITHUB_ENV"
             exit 0
