@@ -46,8 +46,8 @@ mmd --daemon
 # 或简写
 mmd -d
 
-# 推荐：后台常驻守护模式运行
-nohup mmd -d > /data/local/tmp/mmd.log 2>&1 &
+# 推荐：后台常驻守护模式运行（若未加入 PATH，可使用绝对路径 /data/local/tmp/mmd）
+nohup /data/local/tmp/mmd -d > /data/local/tmp/mmd.log 2>&1 &
 
 # 通过轻量 Socket 向后台常驻的 mmd 发送即时指令
 mmd --client trigger   # 立即唤起一次重压缩维护

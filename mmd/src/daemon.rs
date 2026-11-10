@@ -204,7 +204,10 @@ fn handle_client(
             let recomp_algo = zram0.read_recomp_algorithm().unwrap_or_default();
             let disksize = zram0.read_disksize().unwrap_or_default();
 
-            let last_maint = context.lock().map(|c| c.last_maintenance_at.elapsed()).unwrap_or_default();
+            let last_maint = match context.lock() {
+                Ok(c) => c.last_maintenance_at.elapsed(),
+                Err(p) => p.into_inner().last_maintenance_at.elapsed(),
+            };
 
             writeln!(stream, "ZRAM Device 0:")?;
             writeln!(stream, "  Disksize: {}", disksize.trim())?;
