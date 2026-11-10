@@ -71,6 +71,7 @@ wild_kernel_comparison.md
 
 # MMD standalone daemon
 mmd/target/
+mmd/out/
 mmd/*.ps1
 mmd/*.sh
 mmd/*.bat
