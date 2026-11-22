@@ -108,12 +108,22 @@ on:
         required: false
         type: boolean
         default: false
+    outputs:
+      actual_sublevel:
+        description: "源码 Makefile 中解析出的实际子版本号"
+        value: ${{ jobs.build-kernel.outputs.actual_sublevel }}
+      actual_kernel_full:
+        description: "实际编译的完整内核版本号 (如 6.1.192)"
+        value: ${{ jobs.build-kernel.outputs.actual_kernel_full }}
 
 jobs:
   build-kernel:
     name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      actual_sublevel: ${{ steps.kernel-sublevel.outputs.actual_sublevel }}
+      actual_kernel_full: ${{ steps.kernel-sublevel.outputs.actual_kernel_full }}
 
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -527,6 +537,7 @@ jobs:
           fi
 
       - name: 提取实际子版本号
+        id: kernel-sublevel
         run: |
           ACTUAL_SUBLEVEL="${{ inputs.sub_level }}"
           if [[ -f "$KERNEL_ROOT/common/Makefile" ]]; then
@@ -534,6 +545,8 @@ jobs:
             [[ -n "$EXTRACTED" ]] && ACTUAL_SUBLEVEL="$EXTRACTED"
           fi
           echo "ACTUAL_SUBLEVEL=$ACTUAL_SUBLEVEL" >> $GITHUB_ENV
+          echo "actual_sublevel=$ACTUAL_SUBLEVEL" >> $GITHUB_OUTPUT
+          echo "actual_kernel_full=${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}" >> $GITHUB_OUTPUT
           echo "实际子版本号: $ACTUAL_SUBLEVEL"
 
       # 以同步后的实际 SUBLEVEL 判断，避免对已包含上游修复的 LTS 重复打补丁
@@ -545,6 +558,51 @@ jobs:
             "${{ inputs.kernel_version }}" \
             "$ACTUAL_SUBLEVEL" \
             "$GITHUB_WORKSPACE/security_patch"
+
+      - name: 修复 Linux 6.1 LTS Ext4/NTFS3 空指针崩溃回归
+        if: inputs.kernel_version == '6.1'
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -euo pipefail
+          echo "::group::检查并修复 Ext4/NTFS3 空指针崩溃缺陷"
+
+          PATCH_DIR="$GITHUB_WORKSPACE/patches/lts_fixes"
+
+          # 1. Ext4 mballoc NULL folio dereference 修复
+          EXT4_SRC="fs/ext4/mballoc.c"
+          EXT4_PATCH="$PATCH_DIR/ext4-fix-null-folio-dereference-in-mballoc.patch"
+          if [ -f "$EXT4_SRC" ] && [ -f "$EXT4_PATCH" ]; then
+            if grep -q 'if (IS_ERR(folio) || !folio_test_uptodate(folio)' "$EXT4_SRC"; then
+              echo "[*] 检测到 $EXT4_SRC 存在 IS_ERR(folio) 崩溃缺陷，准备应用官方修复补丁..."
+              if patch --batch --forward --dry-run -p1 < "$EXT4_PATCH" >/dev/null 2>&1; then
+                patch --batch --forward --no-backup-if-mismatch -p1 < "$EXT4_PATCH"
+                echo "[+] 成功应用 Ext4 NULL folio 解引用修复补丁"
+              else
+                echo "::warning::Ext4 补丁 dry-run 未通过，跳过应用"
+              fi
+            else
+              echo "[-] $EXT4_SRC 未发现缺陷特征（上游可能已合入官方修复），跳过"
+            fi
+          fi
+
+          # 2. NTFS3 ntfs_lock_new_page NULL folio dereference 修复
+          NTFS3_SRC="fs/ntfs3/frecord.c"
+          NTFS3_PATCH="$PATCH_DIR/bs-ntfs3-fix-null-folio-dereference-in-ntfs_lock_new.patch"
+          if [ -f "$NTFS3_SRC" ] && [ -f "$NTFS3_PATCH" ]; then
+            if grep -A 10 'ntfs_lock_new_page' "$NTFS3_SRC" | grep -q 'if (IS_ERR(folio))'; then
+              echo "[*] 检测到 $NTFS3_SRC 存在 IS_ERR(folio) 崩溃缺陷，准备应用官方修复补丁..."
+              if patch --batch --forward --dry-run -p1 < "$NTFS3_PATCH" >/dev/null 2>&1; then
+                patch --batch --forward --no-backup-if-mismatch -p1 < "$NTFS3_PATCH"
+                echo "[+] 成功应用 NTFS3 NULL folio 解引用修复补丁"
+              else
+                echo "::warning::NTFS3 补丁 dry-run 未通过，跳过应用"
+              fi
+            else
+              echo "[-] $NTFS3_SRC 未发现缺陷特征，跳过"
+            fi
+          fi
+
+          echo "::endgroup::"
 
       - name: 修复 glibc 2.38 兼容性
         working-directory: ${{ env.KERNEL_ROOT }}/common
@@ -1725,7 +1783,7 @@ jobs:
 
           {
             echo "Android 版本: ${{ inputs.android_version }}"
-            echo "内核版本: ${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+            echo "内核版本: ${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}"
             echo "安全补丁级别: ${{ inputs.os_patch_level }}"
             echo "KernelSU 变体: ${{ inputs.ksu_variant }}"
             echo "配置名称: ${CONFIG:-未知}"
@@ -1793,7 +1851,7 @@ jobs:
         if: inputs.artifact_upload_mode == '上传全部'
         run: |
           cd "$ANYKERNEL3"
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
 
@@ -1823,15 +1881,15 @@ jobs:
 
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-boot.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-boot-gz.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-boot-lz4.img
 
       - name: 构建 Boot 镜像 (Android 13+)
         if: inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' || inputs.android_version == 'android16'
@@ -1841,15 +1899,15 @@ jobs:
 
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-boot.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-boot-gz.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${ACTUAL_SUBLEVEL}-${{ inputs.os_patch_level }}-boot-lz4.img
 
       - name: 收集补丁冲突文件
         if: always()
