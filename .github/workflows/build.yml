@@ -972,9 +972,9 @@ jobs:
           # 必须在「生成 SUSFS 集成补丁」之后运行，避免 NoMount 改动被计入 susfs.patch；
           # 且在「备份基准 defconfig」之后追加 CONFIG，确保 6.1+ 的 bazel fragment diff 能捕获 CONFIG_NOMOUNT。
           set -euo pipefail
-          # 拉取 NoMount 内核集成脚本（dev 分支最新提交），脚本会克隆仓库、建立 fs/nomount 软链接并注册 Kconfig/Makefile（内部含幂等守卫）
+          # 拉取 NoMount 内核集成脚本（master 分支，默认检出官方最新正式版 Release Tag），建立 fs/nomount 软链接并注册 Kconfig/Makefile
           curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
-            https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s dev
+            https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/master/kernel/setup.sh | bash
 
           if [ ! -L "fs/nomount" ]; then
             echo "::error::NoMount 集成失败：fs/nomount 软链接缺失"
@@ -1326,8 +1326,15 @@ jobs:
 
           # LTS 分支持续合入 stable 修复，上下文会与月度分支分叉（如 sysctl_net_ipv4.c 在
           # /* obsolete */ 前新增 tcp_min_rcvbuf），存在同名 -lts 补丁时 LTS 构建改用它
-          if [ -n "$BBR3_PATCH" ] && [ "${{ inputs.os_patch_level }}" = "lts" ] && [ -f "${BBR3_PATCH%.patch}-lts.patch" ]; then
-            BBR3_PATCH="${BBR3_PATCH%.patch}-lts.patch"
+          # 优先使用本仓库 patches/bbrv3/ 提供的专用 LTS 补丁（如 6.1 LTS），其次检查上游补丁目录
+          if [ -n "$BBR3_PATCH" ] && [ "${{ inputs.os_patch_level }}" = "lts" ]; then
+            LOCAL_LTS_PATCH="$GITHUB_WORKSPACE/patches/bbrv3/$(basename "${BBR3_PATCH%.patch}-lts.patch")"
+            if [ -f "$LOCAL_LTS_PATCH" ]; then
+              BBR3_PATCH="$LOCAL_LTS_PATCH"
+              echo "[*] 命中本仓库内置 LTS 专用补丁: $LOCAL_LTS_PATCH"
+            elif [ -f "${BBR3_PATCH%.patch}-lts.patch" ]; then
+              BBR3_PATCH="${BBR3_PATCH%.patch}-lts.patch"
+            fi
           fi
 
           # android16-6.12 的 backport 补丁上游不可用（wild_kernel 已禁用），仅保留基线 BBR v1
