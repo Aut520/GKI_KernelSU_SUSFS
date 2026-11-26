@@ -61,13 +61,10 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-  deploy-pages:
+  build-pages:
     if: ${{ github.repository == 'zzh20188/GKI_KernelSU_SUSFS' || github.repository_owner == 'Aut520' }}
     needs: update-data
     runs-on: ubuntu-24.04
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -100,6 +97,17 @@ jobs:
         with:
           path: web
 
+  deploy-pages:
+    if: ${{ github.repository == 'zzh20188/GKI_KernelSU_SUSFS' || github.repository_owner == 'Aut520' }}
+    needs: build-pages
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
